@@ -29,7 +29,7 @@ STEPS = [
     "8 - Review & export",
 ]
 
-ACTIVITY_GROUPS = {
+LEGACY_ACTIVITY_GROUPS = {
     "Structural supervision checklists": [
         "Concreting works",
         "Post-tensioning works",
@@ -84,6 +84,20 @@ ACTIVITY_GROUPS = {
         "Other / project-specific supervision activity",
     ],
 }
+
+STRUCTURAL_SUPERVISION_ACTIVITIES = LEGACY_ACTIVITY_GROUPS[
+    "Structural supervision checklists"
+]
+
+SUPERVISION_ACTIVITIES = [
+    *STRUCTURAL_SUPERVISION_ACTIVITIES,
+    "Bored tunnelling",
+    "Material tests - structural concrete",
+    "Material tests - post-tensioning",
+    "Material tests - structural steelworks",
+    "Fabrication-yard supervision",
+    "Project-specific",
+]
 
 APPROACHES = [
     "Technology replacement",
@@ -300,8 +314,8 @@ def new_implementation_phase(position: int = 0) -> dict:
 def new_activity() -> dict:
     return {
         "uid": uuid4().hex[:10],
-        "category": "",
         "work_type": "",
+        "custom_activity_name": "",
         "description": "",
         "location": "",
         "complexity": "Simple",
@@ -363,9 +377,8 @@ def migrate_plan(plan: dict) -> dict:
             activity["implementation_phases"] = [phase]
         for position, phase in enumerate(activity["implementation_phases"]):
             _merge_missing(phase, new_implementation_phase(position))
-        activity["category"] = activity.get("category") or category_for_activity(
-            activity.get("work_type", "")
-        )
+        activity["work_type"] = flatten_legacy_activity(activity)
+        activity.pop("category", None)
         for kind, assignment_key in PROFILE_ASSIGNMENT_KEYS.items():
             available_ids = {
                 profile.get("id") for profile in profiles.get(kind, [])
@@ -391,11 +404,46 @@ def new_profile(kind: str, plan: dict) -> dict:
     return template
 
 
-def category_for_activity(work_type: str) -> str:
-    for category, activities in ACTIVITY_GROUPS.items():
-        if work_type in activities:
-            return category
-    return "Project-specific" if work_type else ""
+def flatten_legacy_activity(activity: dict) -> str:
+    """Map the earlier group + child selection into the flat activity list."""
+    work_type = str(activity.get("work_type", "")).strip()
+    category = str(activity.get("category", "")).strip()
+    if work_type in SUPERVISION_ACTIVITIES:
+        return work_type
+    if (
+        category == "Structural supervision checklists"
+        and work_type in STRUCTURAL_SUPERVISION_ACTIVITIES
+    ):
+        return work_type
+    if category in SUPERVISION_ACTIVITIES:
+        if category == "Project-specific" and work_type not in (
+            "",
+            "Other / project-specific supervision activity",
+        ):
+            activity["custom_activity_name"] = (
+                activity.get("custom_activity_name") or work_type
+            )
+        return category
+    for legacy_group, legacy_activities in LEGACY_ACTIVITY_GROUPS.items():
+        if work_type in legacy_activities:
+            if legacy_group == "Structural supervision checklists":
+                return work_type
+            if legacy_group == "Project-specific":
+                activity.setdefault("custom_activity_name", "")
+            return legacy_group
+    if work_type:
+        activity["custom_activity_name"] = activity.get("custom_activity_name") or work_type
+        return "Project-specific"
+    return ""
+
+
+def activity_display_name(activity: dict) -> str:
+    if activity.get("work_type") == "Project-specific":
+        return (
+            activity.get("custom_activity_name", "").strip()
+            or "Project-specific activity"
+        )
+    return activity.get("work_type", "").strip()
 
 
 def recommended_approach(complexity: str, frequency: str) -> str:
@@ -564,6 +612,16 @@ def validate(plan: dict) -> list[tuple[int, str]]:
         if not activity.get("work_type", "").strip():
             issues.append(
                 (activity_step, f"Select the supervision activity for activity {index}.")
+            )
+        if (
+            activity.get("work_type") == "Project-specific"
+            and not activity.get("custom_activity_name", "").strip()
+        ):
+            issues.append(
+                (
+                    activity_step,
+                    f"Name the project-specific supervision activity for activity {index}.",
+                )
             )
         if not activity["description"].strip() or not activity["location"].strip():
             issues.append(
@@ -740,56 +798,41 @@ def render_activities() -> None:
         "workmanship, site conditions, visibility or intervention capability is inadequate."
     )
     st.caption(
-        "Select reusable project profiles, then record only activity-specific "
-        "requirements and deviations. Each activity can have several implementation phases."
+        "Select one supervision activity from the flat guide-based list, assign "
+        "reusable project profiles, and record only activity-specific variations. "
+        "Each activity can have several implementation phases."
     )
     plan = st.session_state.plan
     for index, activity in enumerate(plan["activities"]):
         activity_id = activity["uid"]
-        activity["category"] = activity.get("category") or category_for_activity(
-            activity.get("work_type", "")
-        )
-        selected_name = activity.get("work_type") or "Select an activity"
+        selected_name = activity_display_name(activity) or "Select an activity"
         with st.expander(
             f"Activity {index + 1:02d} - {selected_name}", expanded=True
         ):
             col1, col2 = st.columns(2)
             with col1:
-                categories = list(ACTIVITY_GROUPS)
-                current_category = activity.get("category", "")
-                category_index = (
-                    categories.index(current_category)
-                    if current_category in categories
-                    else None
-                )
-                selected_category = st.selectbox(
-                    "Activity group *",
-                    categories,
-                    index=category_index,
-                    placeholder="Select a guide category",
-                    key=f"activity_category_{activity_id}",
-                )
-                if selected_category != current_category:
-                    activity["category"] = selected_category or ""
-                    activity["work_type"] = ""
-                choices = ACTIVITY_GROUPS.get(activity.get("category", ""), [])
                 current_work_type = activity.get("work_type", "")
                 work_type_index = (
-                    choices.index(current_work_type)
-                    if current_work_type in choices
+                    SUPERVISION_ACTIVITIES.index(current_work_type)
+                    if current_work_type in SUPERVISION_ACTIVITIES
                     else None
                 )
                 activity["work_type"] = (
                     st.selectbox(
                         "Supervision activity *",
-                        choices,
+                        SUPERVISION_ACTIVITIES,
                         index=work_type_index,
                         placeholder="Select the activity",
-                        key=f"work_type_{activity_id}_{activity.get('category', 'none')}",
-                        disabled=not choices,
+                        key=f"work_type_{activity_id}",
                     )
                     or ""
                 )
+                if activity["work_type"] == "Project-specific":
+                    activity["custom_activity_name"] = st.text_input(
+                        "Project-specific activity name *",
+                        activity.get("custom_activity_name", ""),
+                        key=f"custom_activity_{activity_id}",
+                    )
                 activity["location"] = st.text_input(
                     "Location / element IDs *",
                     activity["location"],
@@ -1151,7 +1194,7 @@ def render_phasing() -> None:
     for index, activity in enumerate(st.session_state.plan["activities"], start=1):
         rows.append(
             {
-                "Activity": activity.get("work_type") or f"Activity {index}",
+                "Activity": activity_display_name(activity) or f"Activity {index}",
                 "Phases": ", ".join(
                     phase_label(phase)
                     for phase in activity.get("implementation_phases", [])
@@ -1268,7 +1311,7 @@ def render_review() -> None:
     for index, activity in enumerate(plan["activities"], start=1):
         allocation_rows.append(
             {
-                "Activity": activity.get("work_type") or f"Activity {index}",
+                "Activity": activity_display_name(activity) or f"Activity {index}",
                 "People": profile_label(
                     plan, "people", activity.get("people_profile_id", "P1")
                 ),

@@ -120,7 +120,6 @@ class ReportGeneratorTest(unittest.TestCase):
             },
             "activities": [
                 {
-                    "category": "Structural supervision checklists",
                     "work_type": "Concreting works",
                     "description": "Concrete placement supervision",
                     "location": "Block A, Level 2",
@@ -185,6 +184,7 @@ class ReportGeneratorTest(unittest.TestCase):
         self.assertIn("P2 - Concrete deployment team", document_xml)
         self.assertIn("30% to 75% of the activity", document_xml)
         self.assertIn("Pre-pour hold point retained.", document_xml)
+        self.assertNotIn("Guide category", document_xml)
         self.assertGreaterEqual(len(doc.tables), 14)
         self.assertEqual(round(doc.sections[0].page_width.inches, 2), 8.27)
         self.assertEqual(round(doc.sections[0].page_height.inches, 2), 11.69)

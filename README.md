@@ -7,9 +7,9 @@ Microsoft Word report.
 ## Features
 
 - Eight-step workflow from project definition to QP(S) sign-off
-- Grouped activity selector covering the structural-work checklists, bored
-  tunnelling, material tests and fabrication-yard supervision in the older Site
-  Supervision Plan guide
+- Flat supervision-activity selector: individual structural-checklist
+  activities plus bored tunnelling, material-test, fabrication-yard and
+  project-specific activities from the older Site Supervision Plan guide
 - Activity suitability matrix with alternative-approach justification
 - Multiple implementation phases within the same activity, including progress
   ranges, RSS extent, parallel supervision, phase gates and QP(S) review points

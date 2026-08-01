@@ -343,6 +343,12 @@ def _phase_name(phase: dict[str, Any], fallback: str) -> str:
     return _text(phase.get("name"), fallback)
 
 
+def _activity_name(activity: dict[str, Any]) -> str:
+    if activity.get("work_type") == "Project-specific":
+        return _text(activity.get("custom_activity_name"), "Project-specific activity")
+    return _text(activity.get("work_type"), "Not selected")
+
+
 def _fill_cover(doc: Document, data: dict[str, Any]) -> None:
     project = data.get("project", {})
     team = data.get("team", {})
@@ -473,12 +479,11 @@ def _fill_activities(doc: Document, data: dict[str, Any]) -> None:
     for index, activity in enumerate(activities, start=1):
         _add_subheading(
             cell,
-            f"Activity {index}: {_text(activity.get('work_type'), 'Not selected')}",
+            f"Activity {index}: {_activity_name(activity)}",
         )
         _add_two_column_table(
             cell,
             [
-                ("Guide category", activity.get("category")),
                 ("Location / element IDs", activity.get("location")),
                 ("Scope of supervision", activity.get("description")),
                 (
