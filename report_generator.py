@@ -1,43 +1,122 @@
-"""Native DOCX report generation for the RSS Plan Builder."""
+"""Template-faithful DOCX generation for the RSS Plan Builder."""
 
 from __future__ import annotations
 
+import hashlib
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from docx import Document
-from docx.enum.section import WD_SECTION
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Inches, Pt, RGBColor
+from docx.shared import Inches, Pt, RGBColor
 
 
-INK = "112536"
-TEAL = "087E8B"
-PALE = "E8F6F4"
-LINE = "C7D4D9"
-MUTED = "667985"
+TEMPLATE_PATH = (
+    Path(__file__).resolve().parent
+    / "assets"
+    / "Remote Site Supervision Plan (Template).docx"
+)
+TEMPLATE_SHA256 = (
+    "1A9DCE5E3006361CE001DDB97143BA58B6734D773877DAE53A1B00B8184F074B"
+)
+BLACK = RGBColor(0, 0, 0)
+GREY = RGBColor(96, 96, 96)
 
 
-def _text(value: Any) -> str:
+def _text(value: Any, blank: str = "") -> str:
     value = "" if value is None else str(value).strip()
-    return value or "Not specified"
+    return value or blank
 
 
-def _set_cell_shading(cell, fill: str) -> None:
+def _verify_template(path: Path) -> None:
+    if not path.exists():
+        raise FileNotFoundError(
+            "The BCA Remote Site Supervision Plan template is missing from "
+            f"{path.parent}."
+        )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest().upper()
+    if path == TEMPLATE_PATH and digest != TEMPLATE_SHA256:
+        raise ValueError(
+            "The bundled BCA template has changed. Restore the original template "
+            "before generating a report."
+        )
+
+
+def _set_run_style(run, size: float = 10, bold: bool = False, italic: bool = False):
+    run.font.name = "Arial"
+    run.font.size = Pt(size)
+    run.font.bold = bold
+    run.font.italic = italic
+    run.font.color.rgb = BLACK
+
+
+def _set_paragraph_style(
+    paragraph,
+    size: float = 10,
+    bold: bool = False,
+    after: float = 4,
+    before: float = 0,
+):
+    paragraph.paragraph_format.space_before = Pt(before)
+    paragraph.paragraph_format.space_after = Pt(after)
+    paragraph.paragraph_format.line_spacing = 1.05
+    for run in paragraph.runs:
+        _set_run_style(run, size=size, bold=bold)
+
+
+def _clear_cell(cell) -> None:
+    cell._element.clear_content()
+    cell.add_paragraph()
+
+
+def _write_cell(cell, value: Any, size: float = 10, bold: bool = False) -> None:
+    _clear_cell(cell)
+    paragraph = cell.paragraphs[0]
+    run = paragraph.add_run(_text(value))
+    _set_run_style(run, size=size, bold=bold)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing = 1.0
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+
+def _write_labeled_cell(cell, label: str, value: Any) -> None:
+    _clear_cell(cell)
+    paragraph = cell.paragraphs[0]
+    label_run = paragraph.add_run(f"{label}:\n")
+    _set_run_style(label_run, size=10, bold=True)
+    value_run = paragraph.add_run(_text(value, "Not specified"))
+    _set_run_style(value_run, size=10)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing = 1.0
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+
+def _add_label_value(cell, label: str, value: Any, size: float = 10) -> None:
+    paragraph = cell.add_paragraph()
+    paragraph.paragraph_format.space_after = Pt(4)
+    paragraph.paragraph_format.line_spacing = 1.05
+    label_run = paragraph.add_run(f"{label}: ")
+    _set_run_style(label_run, size=size, bold=True)
+    value_run = paragraph.add_run(_text(value, "Not specified"))
+    _set_run_style(value_run, size=size)
+
+
+def _add_subheading(cell, text: str) -> None:
+    paragraph = cell.add_paragraph()
+    paragraph.paragraph_format.space_before = Pt(6)
+    paragraph.paragraph_format.space_after = Pt(4)
+    run = paragraph.add_run(text)
+    _set_run_style(run, size=11, bold=True)
+
+
+def _set_cell_margins(
+    cell, top: int = 100, start: int = 110, bottom: int = 100, end: int = 110
+) -> None:
     tc_pr = cell._tc.get_or_add_tcPr()
-    shading = tc_pr.find(qn("w:shd"))
-    if shading is None:
-        shading = OxmlElement("w:shd")
-        tc_pr.append(shading)
-    shading.set(qn("w:fill"), fill)
-
-
-def _set_cell_margins(cell, top=120, start=140, bottom=120, end=140) -> None:
-    tc = cell._tc
-    tc_pr = tc.get_or_add_tcPr()
     tc_mar = tc_pr.first_child_found_in("w:tcMar")
     if tc_mar is None:
         tc_mar = OxmlElement("w:tcMar")
@@ -56,376 +135,575 @@ def _set_cell_margins(cell, top=120, start=140, bottom=120, end=140) -> None:
         node.set(qn("w:type"), "dxa")
 
 
-def _set_repeat_table_header(row) -> None:
+def _prevent_row_split(row) -> None:
     tr_pr = row._tr.get_or_add_trPr()
-    tbl_header = OxmlElement("w:tblHeader")
-    tbl_header.set(qn("w:val"), "true")
-    tr_pr.append(tbl_header)
+    cant_split = OxmlElement("w:cantSplit")
+    tr_pr.append(cant_split)
 
 
-def _add_page_number(paragraph) -> None:
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run = paragraph.add_run("Page ")
-    run.font.size = Pt(8)
-    run.font.color.rgb = RGBColor.from_string(MUTED)
-    fld_char1 = OxmlElement("w:fldChar")
-    fld_char1.set(qn("w:fldCharType"), "begin")
-    instr_text = OxmlElement("w:instrText")
-    instr_text.set(qn("xml:space"), "preserve")
-    instr_text.text = "PAGE"
-    fld_char2 = OxmlElement("w:fldChar")
-    fld_char2.set(qn("w:fldCharType"), "end")
-    run._r.append(fld_char1)
-    run._r.append(instr_text)
-    run._r.append(fld_char2)
+def _add_picture(
+    cell,
+    image_bytes: bytes | None,
+    caption: str,
+    placeholder: str,
+    width: float = 5.55,
+) -> None:
+    if not image_bytes:
+        paragraph = cell.add_paragraph()
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run(placeholder)
+        _set_run_style(run, size=9, italic=True)
+        run.font.color.rgb = GREY
+        return
+    try:
+        paragraph = cell.add_paragraph()
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run()
+        run.add_picture(BytesIO(image_bytes), width=Inches(width))
+        if caption:
+            caption_paragraph = cell.add_paragraph()
+            caption_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            caption_run = caption_paragraph.add_run(caption)
+            _set_run_style(caption_run, size=9, italic=True)
+    except Exception:
+        paragraph = cell.add_paragraph()
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run(
+            f"{placeholder} (The uploaded image could not be embedded.)"
+        )
+        _set_run_style(run, size=9, italic=True)
+        run.font.color.rgb = GREY
 
 
-def _configure_document(doc: Document) -> None:
-    section = doc.sections[0]
-    section.page_width = Cm(21.0)
-    section.page_height = Cm(29.7)
-    section.top_margin = Cm(1.8)
-    section.bottom_margin = Cm(1.8)
-    section.left_margin = Cm(1.8)
-    section.right_margin = Cm(1.8)
-    section.header_distance = Cm(0.8)
-    section.footer_distance = Cm(0.8)
-
-    styles = doc.styles
-    normal = styles["Normal"]
-    normal.font.name = "Arial"
-    normal.font.size = Pt(10)
-    normal.font.color.rgb = RGBColor.from_string(INK)
-    normal.paragraph_format.space_after = Pt(6)
-    normal.paragraph_format.line_spacing = 1.12
-
-    for name, size, color, before, after in (
-        ("Title", 30, INK, 0, 12),
-        ("Heading 1", 18, INK, 18, 8),
-        ("Heading 2", 13, TEAL, 12, 5),
-        ("Heading 3", 11, INK, 9, 4),
-    ):
-        style = styles[name]
-        style.font.name = "Arial"
-        style.font.size = Pt(size)
-        style.font.bold = name != "Title"
-        style.font.color.rgb = RGBColor.from_string(color)
-        style.paragraph_format.space_before = Pt(before)
-        style.paragraph_format.space_after = Pt(after)
-        style.paragraph_format.keep_with_next = True
-
-    header = section.header.paragraphs[0]
-    header.text = "REMOTE SITE SUPERVISION PLAN"
-    header.style = styles["Normal"]
-    header.runs[0].font.size = Pt(8)
-    header.runs[0].font.bold = True
-    header.runs[0].font.color.rgb = RGBColor.from_string(TEAL)
-    header.paragraph_format.space_after = Pt(0)
-
-    _add_page_number(section.footer.paragraphs[0])
-
-
-def _add_kv_table(doc: Document, rows: list[tuple[str, Any]]) -> None:
-    table = doc.add_table(rows=0, cols=2)
+def _add_two_column_table(
+    container_cell, rows: list[tuple[str, Any]], label_width: float = 2.05
+) -> None:
+    table = container_cell.add_table(rows=0, cols=2)
+    table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
-    table.columns[0].width = Cm(4.6)
-    table.columns[1].width = Cm(12.4)
+    total_width = 5.86
     for label, value in rows:
         cells = table.add_row().cells
-        cells[0].width = Cm(4.6)
-        cells[1].width = Cm(12.4)
-        cells[0].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-        cells[1].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-        _set_cell_shading(cells[0], PALE)
+        _prevent_row_split(table.rows[-1])
+        cells[0].width = Inches(label_width)
+        cells[1].width = Inches(total_width - label_width)
         for cell in cells:
             _set_cell_margins(cell)
-        label_p = cells[0].paragraphs[0]
-        label_p.paragraph_format.space_after = Pt(0)
-        label_run = label_p.add_run(label.upper())
-        label_run.bold = True
-        label_run.font.size = Pt(8)
-        label_run.font.color.rgb = RGBColor.from_string(TEAL)
-        value_p = cells[1].paragraphs[0]
-        value_p.paragraph_format.space_after = Pt(0)
-        value_p.add_run(_text(value))
-    doc.add_paragraph().paragraph_format.space_after = Pt(0)
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        _write_cell(cells[0], label, size=9, bold=True)
+        _write_cell(cells[1], _text(value, "Not specified"), size=9)
 
 
-def _add_callout(doc: Document, title: str, body: str) -> None:
-    table = doc.add_table(rows=1, cols=1)
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    cell = table.cell(0, 0)
-    _set_cell_shading(cell, PALE)
-    _set_cell_margins(cell, top=170, start=220, bottom=170, end=220)
-    p = cell.paragraphs[0]
-    p.paragraph_format.space_after = Pt(0)
-    run = p.add_run(f"{title} ")
-    run.bold = True
-    run.font.color.rgb = RGBColor.from_string(TEAL)
-    p.add_run(body)
-    doc.add_paragraph().paragraph_format.space_after = Pt(0)
+def _competency_summary(team: dict[str, Any]) -> str:
+    checks = [
+        (
+            "Technology-provider training completed",
+            team.get("competency_provider_training"),
+        ),
+        (
+            "Proficiency demonstrated during an RSS trial",
+            team.get("competency_trial"),
+        ),
+        (
+            "Professional registration / appointment checked",
+            team.get("competency_registration"),
+        ),
+        (
+            "Upgrade / refresher training arrangement confirmed",
+            team.get("competency_upgrade_training"),
+        ),
+    ]
+    lines = [f"{'Confirmed' if status else 'Not confirmed'} - {label}" for label, status in checks]
+    evidence = _text(team.get("competency_evidence") or team.get("competency"))
+    if evidence:
+        lines.append(f"Evidence / record reference - {evidence}")
+    verifier = _text(team.get("competency_verifier"))
+    date = _text(team.get("competency_date"))
+    if verifier or date:
+        lines.append(
+            f"Verified by - {verifier or 'Not specified'}"
+            f"; date - {date or 'Not specified'}"
+        )
+    return "\n".join(lines)
 
 
-def _add_activity(doc: Document, activity: dict[str, Any], index: int) -> None:
-    heading = doc.add_heading(
-        f"4.{index} {_text(activity.get('work_type'))}", level=2
+PROFILE_FIELDS = {
+    "people": [
+        ("Site supervisors", "site_supervisors"),
+        ("Builder-side operators", "builder_operators"),
+        ("Backup personnel", "backup_personnel"),
+        ("Deployment / handover notes", "notes"),
+    ],
+    "technology": [
+        ("Live-streaming devices", "live_devices"),
+        ("Evidence / measurement devices", "evidence_devices"),
+        ("Two-way audio", "audio"),
+        ("Primary connectivity", "connectivity"),
+        ("Backup connectivity", "backup_connectivity"),
+        ("RSS platform / software", "platform"),
+        ("Video / recording standard", "video_standard"),
+        ("Secure storage", "storage"),
+        ("Power / battery backup", "power_backup"),
+        ("Equipment register / calibration", "equipment_register"),
+    ],
+    "controls": [
+        ("Preparation", "before"),
+        ("Live supervision", "during"),
+        ("Close-out", "after"),
+        ("Communication", "communication"),
+        ("Stop-work / in-person trigger", "stop_work"),
+        ("Technology failure", "tech_failure"),
+        ("Poor evidence", "poor_evidence"),
+        ("Safety incident", "safety_incident"),
+        ("Non-conformity", "non_conformity"),
+    ],
+    "records": [
+        ("Naming / indexing", "naming"),
+        ("Access / data security", "access"),
+        ("Backup / recovery", "backups"),
+        ("Retention", "retention"),
+        ("Verification", "verification"),
+        ("Audits", "audits"),
+        ("Performance monitoring", "performance"),
+        ("Traceability", "traceability"),
+    ],
+}
+
+
+def _profile_reference(data: dict[str, Any], kind: str, profile_id: Any) -> str:
+    profile_id = _text(profile_id)
+    for profile in data.get("profiles", {}).get(kind, []):
+        if profile.get("id") == profile_id:
+            return f"{profile_id} - {_text(profile.get('name'), 'Unnamed profile')}"
+    return profile_id or "Not specified"
+
+
+def _profile_details(profile: dict[str, Any], kind: str) -> str:
+    if profile.get("default"):
+        return (
+            "Project default; uses the master information in the corresponding "
+            "plan section."
+        )
+    variations = [
+        f"{label}: {_text(profile.get(key))}"
+        for label, key in PROFILE_FIELDS[kind]
+        if _text(profile.get(key))
+    ]
+    return (
+        "\n".join(variations)
+        if variations
+        else "No variation entered; inherits the project default."
     )
-    heading.paragraph_format.keep_with_next = True
-    _add_kv_table(
-        doc,
+
+
+def _add_profile_register(
+    cell, data: dict[str, Any], kind: str, heading: str
+) -> None:
+    profiles = data.get("profiles", {}).get(kind, [])
+    if not profiles:
+        return
+    _add_subheading(cell, heading)
+    _add_two_column_table(
+        cell,
         [
-            ("Location / element IDs", activity.get("location")),
-            ("Scope of supervision", activity.get("description")),
             (
-                "Assessment",
-                f"{_text(activity.get('complexity'))} inspection / "
-                f"{_text(activity.get('frequency'))} supervision",
-            ),
-            ("Selected approach", activity.get("approach")),
-            ("Implementation phase", activity.get("phase")),
-            ("Extent of RSS", activity.get("extent")),
-            ("Evidence requirements", activity.get("evidence")),
-            ("Equipment / software", activity.get("equipment")),
-            ("Professional justification", activity.get("deviation")),
-            (
-                "Annex D review",
-                "Confirmed"
-                if activity.get("annex_d_reviewed")
-                else "Not yet confirmed",
-            ),
+                f"{_text(profile.get('id'), 'Unnumbered')} - "
+                f"{_text(profile.get('name'), 'Unnamed profile')}",
+                _profile_details(profile, kind),
+            )
+            for profile in profiles
         ],
+        label_width=2.05,
     )
 
 
-def build_docx(data: dict[str, Any], site_plan_bytes: bytes | None = None) -> bytes:
-    """Return a polished native DOCX containing the completed RSS plan."""
-    doc = Document()
-    _configure_document(doc)
+def _phase_details(phase: dict[str, Any]) -> str:
+    parts = [
+        f"Activity progress range: {_text(phase.get('progress_range'), 'Not specified')}",
+        f"Extent of RSS: {_text(phase.get('rss_extent'), 'Not specified')}",
+        (
+            "Parallel / in-person verification: "
+            f"{_text(phase.get('parallel_supervision'), 'Use project default')}"
+        ),
+        (
+            "Acceptance / progression criteria: "
+            f"{_text(phase.get('acceptance_criteria'), 'Not specified')}"
+        ),
+        f"QP(S) review point: {_text(phase.get('review_point'), 'Not specified')}",
+    ]
+    if _text(phase.get("remarks")):
+        parts.append(f"Remarks: {_text(phase.get('remarks'))}")
+    return "\n".join(parts)
+
+
+def _phase_name(phase: dict[str, Any], fallback: str) -> str:
+    if phase.get("name") == "Custom":
+        return _text(phase.get("custom_name"), "Custom phase")
+    return _text(phase.get("name"), fallback)
+
+
+def _fill_cover(doc: Document, data: dict[str, Any]) -> None:
     project = data.get("project", {})
     team = data.get("team", {})
+    cover = doc.tables[0]
+    _write_labeled_cell(cover.cell(0, 0), "Project Reference No.", project.get("reference"))
+    _write_labeled_cell(cover.cell(1, 0), "Project Description", project.get("description"))
+    _write_labeled_cell(
+        cover.cell(2, 0),
+        f"{_text(project.get('site_type'), 'Construction site')}\nAddress",
+        project.get("address"),
+    )
+
+    prepared = doc.tables[1]
+    _write_cell(prepared.cell(0, 0), "Name of Qualified Person (Supervision)\n& PE Registration No.", size=10)
+    _write_cell(
+        prepared.cell(0, 1),
+        f"{_text(team.get('qp_name'), 'Not specified')}\n"
+        f"PE Reg. No. {_text(team.get('pe_number'), 'Not specified')}",
+        size=10,
+    )
+    _write_cell(prepared.cell(1, 0), "Company", size=10)
+    _write_cell(prepared.cell(1, 1), team.get("company"), size=10)
+    _write_cell(prepared.cell(2, 0), "Date", size=10)
+    _write_cell(prepared.cell(2, 1), team.get("prepared_date"), size=10)
+
+
+def _fill_project_background(
+    doc: Document, data: dict[str, Any], site_plan_bytes: bytes | None
+) -> None:
+    project = data.get("project", {})
+    cell = doc.tables[3].cell(0, 0)
+    _clear_cell(cell)
+    _add_label_value(cell, "Project description", project.get("description"))
+    _add_label_value(cell, "Site location", project.get("address"))
+    _add_label_value(cell, "Structural system", project.get("structural_system"))
+    _add_label_value(cell, "Foundation system", project.get("foundation_system"))
+    _add_label_value(cell, "RSS constraints / challenges", project.get("challenges"))
+    _add_label_value(cell, "Permit date", project.get("permit_date"))
+
+    site_table = doc.tables[4]
+    _clear_cell(site_table.cell(0, 0))
+    _add_picture(
+        site_table.cell(0, 0),
+        site_plan_bytes,
+        "",
+        "Insert overall site plan or location of construction site / fabrication yard.",
+    )
+    _write_cell(
+        site_table.cell(1, 0),
+        "Figure 1: Overall Site Plan or Location of Fabrication Yard",
+        size=9,
+    )
+
+
+def _fill_phasing(doc: Document, data: dict[str, Any]) -> None:
     phases = data.get("phases", {})
+    cell = doc.tables[5].cell(0, 0)
+    _clear_cell(cell)
+    _add_subheading(cell, "2.1. Phased Implementation")
+    _add_two_column_table(
+        cell,
+        [
+            ("Phase 1 - first 30% of works", phases.get("phase_1")),
+            ("Phase 2 - 30% to 75% of works", phases.get("phase_2")),
+            ("Phase 3 - 75% to 100% of works", phases.get("phase_3")),
+            ("Beyond Phase 3", phases.get("beyond")),
+        ],
+    )
+    _add_subheading(cell, "2.2. Acceptance Criteria for RSS Implementation")
+    _add_label_value(cell, "Phase acceptance criteria", phases.get("criteria"))
+    _add_label_value(cell, "Parallel supervision plan", phases.get("parallel_plan"))
+    _add_label_value(cell, "Review / adjustment cadence", phases.get("review_cadence"))
+
+
+def _fill_people(
+    doc: Document, data: dict[str, Any], org_chart_bytes: bytes | None
+) -> None:
+    team = data.get("team", {})
+    cell = doc.tables[6].cell(0, 0)
+    _clear_cell(cell)
+    _add_subheading(cell, "3.1. RSS Team Structure")
+    _add_label_value(cell, "Organisation and reporting lines", team.get("organisation"))
+    _add_picture(
+        cell,
+        org_chart_bytes,
+        "Figure 2: RSS Team Organisation and Reporting Lines",
+        "Optional: insert organisation / reporting-line chart.",
+        width=5.2,
+    )
+    _add_subheading(cell, "3.2. Roles and Responsibilities")
+    _add_label_value(cell, "Qualified Person (Supervision)", team.get("qp_name"))
+    _add_label_value(cell, "Site supervisors (RE/RTO)", team.get("site_supervisors"))
+    _add_label_value(cell, "Builder-side RSS operators", team.get("builder_operators"))
+    _add_label_value(cell, "Backup personnel and handover", team.get("backup_personnel"))
+    _add_subheading(cell, "3.3. Training and Competency Requirements")
+    _add_label_value(cell, "Training programme", team.get("training"))
+    _add_label_value(cell, "Competency verification", _competency_summary(team))
+    _add_profile_register(
+        cell,
+        data,
+        "people",
+        "3.4. Reusable Personnel Deployment Profiles",
+    )
+
+
+def _fill_activities(doc: Document, data: dict[str, Any]) -> None:
+    activities = data.get("activities") or []
+    table = doc.tables[7]
+    note_cell = table.cell(0, 0)
+    _clear_cell(note_cell)
+    note = note_cell.paragraphs[0]
+    note_run = note.add_run(
+        "Each activity below records the QP(S)'s assessment, selected supervision "
+        "approach and minimum evidence. The applicable checklist from the older "
+        "Site Supervision Plan guide and Annex D of the RSS Guidebook must be "
+        "reviewed for the project-specific scope."
+    )
+    _set_run_style(note_run, size=9)
+    note.paragraph_format.space_after = Pt(0)
+
+    cell = table.cell(1, 0)
+    _clear_cell(cell)
+    if not activities:
+        paragraph = cell.paragraphs[0]
+        run = paragraph.add_run("No structural supervision activity has been selected.")
+        _set_run_style(run, size=10, italic=True)
+        return
+    for index, activity in enumerate(activities, start=1):
+        _add_subheading(
+            cell,
+            f"Activity {index}: {_text(activity.get('work_type'), 'Not selected')}",
+        )
+        _add_two_column_table(
+            cell,
+            [
+                ("Guide category", activity.get("category")),
+                ("Location / element IDs", activity.get("location")),
+                ("Scope of supervision", activity.get("description")),
+                (
+                    "Assessment",
+                    f"{_text(activity.get('complexity'), 'Not specified')} inspection / "
+                    f"{_text(activity.get('frequency'), 'Not specified')} supervision",
+                ),
+                ("Selected approach", activity.get("approach")),
+                (
+                    "Assigned people profile",
+                    _profile_reference(
+                        data, "people", activity.get("people_profile_id")
+                    ),
+                ),
+                (
+                    "Assigned technology profile",
+                    _profile_reference(
+                        data,
+                        "technology",
+                        activity.get("technology_profile_id"),
+                    ),
+                ),
+                (
+                    "Assigned control profile",
+                    _profile_reference(
+                        data, "controls", activity.get("control_profile_id")
+                    ),
+                ),
+                (
+                    "Assigned record profile",
+                    _profile_reference(
+                        data, "records", activity.get("record_profile_id")
+                    ),
+                ),
+                (
+                    "Personnel requirements / variation",
+                    activity.get("personnel_requirements"),
+                ),
+                ("Evidence requirements", activity.get("evidence")),
+                ("Equipment / software variation", activity.get("equipment")),
+                (
+                    "Activity-specific controls / hold points",
+                    activity.get("control_overrides"),
+                ),
+                (
+                    "Record / retention / verification variation",
+                    activity.get("record_overrides"),
+                ),
+                (
+                    "Guide / Annex D review",
+                    "Confirmed"
+                    if activity.get("annex_d_reviewed")
+                    else "Not confirmed",
+                ),
+                ("Professional justification", activity.get("deviation")),
+            ],
+            label_width=1.8,
+        )
+        phases = activity.get("implementation_phases") or []
+        if not phases and _text(activity.get("phase")):
+            phases = [
+                {
+                    "name": activity.get("phase"),
+                    "progress_range": "Not specified",
+                    "rss_extent": activity.get("extent"),
+                    "parallel_supervision": "Use project default",
+                    "acceptance_criteria": "Use project default",
+                    "review_point": "Use project default",
+                }
+            ]
+        _add_subheading(cell, f"Implementation Phases - Activity {index}")
+        if phases:
+            _add_two_column_table(
+                cell,
+                [
+                    (
+                        _phase_name(phase, f"Phase entry {phase_index}"),
+                        _phase_details(phase),
+                    )
+                    for phase_index, phase in enumerate(phases, start=1)
+                ],
+                label_width=1.5,
+            )
+        else:
+            _add_label_value(cell, "Implementation phases", "Not specified")
+
+
+def _fill_devices_and_infrastructure(doc: Document, data: dict[str, Any]) -> None:
     technology = data.get("technology", {})
+    devices = doc.tables[8].cell(0, 0)
+    _clear_cell(devices)
+    for label, key in (
+        ("Live streaming devices", "live_devices"),
+        ("Evidence / measurement devices", "evidence_devices"),
+        ("Two-way audio", "audio"),
+        ("Power / battery backup", "power_backup"),
+        ("Equipment register / calibration", "equipment_register"),
+    ):
+        _add_label_value(devices, label, technology.get(key))
+
+    infrastructure = doc.tables[9].cell(0, 0)
+    _clear_cell(infrastructure)
+    for label, key in (
+        ("Primary connectivity", "connectivity"),
+        ("Backup connectivity", "backup_connectivity"),
+        ("RSS platform / software", "platform"),
+        ("Video / recording standard", "video_standard"),
+        ("Secure storage", "storage"),
+    ):
+        _add_label_value(infrastructure, label, technology.get(key))
+    _add_profile_register(
+        infrastructure,
+        data,
+        "technology",
+        "Reusable Technology Profiles",
+    )
+
+
+def _fill_process_quality_records(doc: Document, data: dict[str, Any]) -> None:
     process = data.get("process", {})
     records = data.get("records", {})
-    signoff = data.get("signoff", {})
-
-    cover = doc.add_paragraph()
-    cover.paragraph_format.space_before = Pt(34)
-    eyebrow = cover.add_run("REMOTE SITE SUPERVISION")
-    eyebrow.bold = True
-    eyebrow.font.size = Pt(9)
-    eyebrow.font.color.rgb = RGBColor.from_string(TEAL)
-    eyebrow.font.letter_spacing = Pt(1.5)
-
-    title = doc.add_paragraph(style="Title")
-    title.add_run("Remote Site\nSupervision Plan")
-    title.paragraph_format.space_after = Pt(28)
-
-    _add_kv_table(
-        doc,
-        [
-            ("Project reference", project.get("reference")),
-            ("Project description", project.get("description")),
-            (
-                "Location",
-                f"{_text(project.get('site_type'))}: {_text(project.get('address'))}",
-            ),
-            (
-                "Prepared by",
-                f"{_text(team.get('qp_name'))}, PE Reg. No. "
-                f"{_text(team.get('pe_number'))}",
-            ),
-            ("Company", team.get("company")),
-            ("Date", team.get("prepared_date")),
-        ],
-    )
-    note = doc.add_paragraph()
-    note.paragraph_format.space_before = Pt(28)
-    note_run = note.add_run(
-        "Prepared with reference to the Guidebook for Remote Site Supervision, "
-        "Version 2.0 (June 2026), and the Guide Book for Site Supervision Plan, "
-        "Version 1.1 (October 2023). The Building Control Act and Regulations "
-        "prevail. Verify current BCA requirements before submission."
-    )
-    note_run.italic = True
-    note_run.font.size = Pt(8)
-    note_run.font.color.rgb = RGBColor.from_string(MUTED)
-    doc.add_page_break()
-
-    doc.add_heading("1. Project background", level=1)
-    _add_kv_table(
-        doc,
-        [
-            ("Project description", project.get("description")),
-            ("Site location", project.get("address")),
-            ("Structural system", project.get("structural_system")),
-            ("Foundation system", project.get("foundation_system")),
-            ("RSS challenges", project.get("challenges")),
-            ("Permit date", project.get("permit_date")),
-        ],
-    )
-    if site_plan_bytes:
-        doc.add_heading("Overall site / location plan", level=2)
-        try:
-            paragraph = doc.add_paragraph()
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            paragraph.add_run().add_picture(BytesIO(site_plan_bytes), width=Cm(15.5))
-            caption = doc.add_paragraph("Figure 1: Overall site plan or location plan")
-            caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            caption.runs[0].italic = True
-            caption.runs[0].font.size = Pt(8)
-            caption.runs[0].font.color.rgb = RGBColor.from_string(MUTED)
-        except Exception:
-            _add_callout(
-                doc,
-                "Image note.",
-                "The uploaded site plan could not be embedded. Insert it before submission.",
-            )
-    else:
-        _add_callout(
-            doc,
-            "Required before submission.",
-            "Insert the overall site plan or location plan.",
-        )
-
-    doc.add_heading("2. Implementation plan for remote supervision", level=1)
-    _add_callout(
-        doc,
-        "Implementation basis.",
-        "RSS complements in-person supervision. Suitability is assessed activity "
-        "by activity using risk, complexity, frequency, technology capability "
-        "and site conditions.",
-    )
-    _add_kv_table(
-        doc,
-        [
-            ("Phase 1", phases.get("phase_1")),
-            ("Phase 2", phases.get("phase_2")),
-            ("Phase 3", phases.get("phase_3")),
-            ("Beyond Phase 3", phases.get("beyond")),
-            ("Acceptance criteria", phases.get("criteria")),
-            ("Parallel supervision", phases.get("parallel_plan")),
-            ("Review cadence", phases.get("review_cadence")),
-        ],
-    )
-
-    doc.add_heading("3. Personnel and organisational structure", level=1)
-    _add_kv_table(
-        doc,
-        [
-            ("QP(S)", f"{_text(team.get('qp_name'))} / {_text(team.get('pe_number'))}"),
-            ("Organisation / reporting lines", team.get("organisation")),
-            ("Site supervisors", team.get("site_supervisors")),
-            ("Builder-side RSS operators", team.get("builder_operators")),
-            ("Backup personnel", team.get("backup_personnel")),
-            ("Training programme", team.get("training")),
-            ("Competency verification", team.get("competency")),
-        ],
-    )
-
-    doc.add_heading(
-        "4. Structural activity classification, supervision and evidence", level=1
-    )
-    activities = data.get("activities") or []
-    if not activities:
-        _add_callout(doc, "Required.", "Add at least one structural activity.")
-    for index, activity in enumerate(activities, start=1):
-        _add_activity(doc, activity, index)
-
-    doc.add_heading("5. Devices for remote supervision", level=1)
-    _add_kv_table(
-        doc,
-        [
-            ("Live streaming devices", technology.get("live_devices")),
-            ("Evidence / measurement devices", technology.get("evidence_devices")),
-            ("Two-way audio", technology.get("audio")),
-            ("Power / battery backup", technology.get("power_backup")),
-            ("Equipment register / calibration", technology.get("equipment_register")),
-        ],
-    )
-
-    doc.add_heading("6. Infrastructure requirements", level=1)
-    _add_kv_table(
-        doc,
-        [
-            ("Primary connectivity", technology.get("connectivity")),
-            ("Backup connectivity", technology.get("backup_connectivity")),
-            ("RSS platform", technology.get("platform")),
-            ("Video / recording standard", technology.get("video_standard")),
-            ("Storage", technology.get("storage")),
-        ],
-    )
-
-    doc.add_heading("7. Process for conducting remote supervision", level=1)
-    for title, key in (
-        ("Before remote supervision", "before"),
-        ("During remote supervision", "during"),
-        ("After remote supervision", "after"),
-        ("Communication protocol", "communication"),
+    process_cell = doc.tables[10].cell(0, 0)
+    _clear_cell(process_cell)
+    for label, key in (
+        ("Before Remote Supervision (Preparation Works)", "before"),
+        ("During Remote Supervision", "during"),
+        ("After Remote Supervision", "after"),
+        ("Communication Protocol", "communication"),
     ):
-        doc.add_heading(title, level=2)
-        doc.add_paragraph(_text(process.get(key)))
-
-    doc.add_heading("8. Quality assurance and contingency procedures", level=1)
-    _add_kv_table(
-        doc,
-        [
-            ("Stop-work / in-person trigger", process.get("stop_work")),
-            ("Technology failure", process.get("tech_failure")),
-            ("Poor or incomplete evidence", process.get("poor_evidence")),
-            ("Safety incident", process.get("safety_incident")),
-            ("Non-conformity", process.get("non_conformity")),
-            ("Verification", records.get("verification")),
-            ("Audits / management review", records.get("audits")),
-            ("Performance monitoring", records.get("performance")),
-        ],
+        _add_subheading(process_cell, label)
+        paragraph = process_cell.add_paragraph()
+        run = paragraph.add_run(_text(process.get(key), "Not specified"))
+        _set_run_style(run, size=10)
+        paragraph.paragraph_format.space_after = Pt(4)
+    _add_profile_register(
+        process_cell,
+        data,
+        "controls",
+        "Reusable Control Profiles",
     )
 
-    doc.add_heading("9. Documentation and records management", level=1)
-    _add_kv_table(
-        doc,
-        [
-            ("Naming / indexing", records.get("naming")),
-            ("Access and security", records.get("access")),
-            ("Backup and recovery", records.get("backups")),
-            ("Retention", records.get("retention")),
-            ("Traceability", records.get("traceability")),
-        ],
+    quality = doc.tables[11].cell(0, 0)
+    _clear_cell(quality)
+    for label, value in (
+        ("Stop-work / in-person trigger", process.get("stop_work")),
+        ("Technology failure", process.get("tech_failure")),
+        ("Poor or incomplete evidence", process.get("poor_evidence")),
+        ("Safety incident", process.get("safety_incident")),
+        ("Non-conformity and escalation", process.get("non_conformity")),
+        ("Verification plan", records.get("verification")),
+        ("Audits / management review", records.get("audits")),
+        ("Performance monitoring", records.get("performance")),
+    ):
+        _add_label_value(quality, label, value)
+
+    record_cell = doc.tables[12].cell(0, 0)
+    _clear_cell(record_cell)
+    for label, key in (
+        ("Naming / indexing", "naming"),
+        ("Access and data security", "access"),
+        ("Backup and recovery", "backups"),
+        ("Retention schedule", "retention"),
+        ("Session traceability", "traceability"),
+    ):
+        _add_label_value(record_cell, label, records.get(key))
+    _add_profile_register(
+        record_cell,
+        data,
+        "records",
+        "Reusable Record Profiles",
     )
 
-    doc.add_heading("QP(S) declaration", level=1)
-    declaration = (
+    signoff = data.get("signoff", {})
+    team = data.get("team", {})
+    _add_subheading(record_cell, "QP(S) Declaration")
+    declaration = record_cell.add_paragraph()
+    declaration_text = (
         "I confirm that this Remote Site Supervision Plan has been prepared "
         "using professional judgement for the project and activities described; "
-        "applicable minimum requirements have been reviewed; clear fallback to "
-        "in-person supervision is provided where effective remote supervision "
-        "cannot be achieved; and records will be controlled and retained in "
-        "accordance with this plan and prevailing requirements."
+        "the applicable supervision checklists and minimum requirements have "
+        "been reviewed; in-person supervision will be used whenever the intended "
+        "supervision outcome cannot be achieved remotely; and records will be "
+        "controlled and retained in accordance with this plan and prevailing "
+        "requirements."
     )
-    _add_callout(doc, "Declaration.", declaration)
-    doc.add_paragraph()
-    sign_table = doc.add_table(rows=1, cols=2)
-    sign_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    sign_table.autofit = False
-    sign_table.columns[0].width = Cm(10.5)
-    sign_table.columns[1].width = Cm(5.5)
-    values = [
-        (
-            f"{_text(signoff.get('qp_signature'))}\nQualified Person "
-            f"(Supervision)\nPE Reg. No. {_text(team.get('pe_number'))}"
-        ),
-        f"{_text(signoff.get('sign_date'))}\nDate",
-    ]
-    for cell, value in zip(sign_table.rows[0].cells, values):
-        cell.width = Cm(10.5 if cell == sign_table.rows[0].cells[0] else 5.5)
-        _set_cell_margins(cell, top=300, start=100, bottom=100, end=100)
-        cell.text = value
-        cell.paragraphs[0].paragraph_format.space_before = Pt(18)
-        cell.paragraphs[0].paragraph_format.space_after = Pt(0)
-        cell.paragraphs[0].runs[0].bold = True
+    declaration_run = declaration.add_run(declaration_text)
+    _set_run_style(declaration_run, size=10)
+    _add_label_value(
+        record_cell,
+        "Qualified Person (Supervision)",
+        f"{_text(signoff.get('qp_signature'), 'Not specified')} / "
+        f"PE Reg. No. {_text(team.get('pe_number'), 'Not specified')}",
+    )
+    _add_label_value(record_cell, "Date", signoff.get("sign_date"))
+
+
+def _set_update_fields(doc: Document) -> None:
+    settings = doc.settings.element
+    update_fields = settings.find(qn("w:updateFields"))
+    if update_fields is None:
+        update_fields = OxmlElement("w:updateFields")
+        settings.append(update_fields)
+    update_fields.set(qn("w:val"), "true")
+
+
+def build_docx(
+    data: dict[str, Any],
+    site_plan_bytes: bytes | None = None,
+    org_chart_bytes: bytes | None = None,
+    template_path: str | Path | None = None,
+) -> bytes:
+    """Fill a copy of the supplied BCA template and return a native DOCX."""
+    path = Path(template_path) if template_path else TEMPLATE_PATH
+    _verify_template(path)
+    doc = Document(path)
+
+    _fill_cover(doc, data)
+    _fill_project_background(doc, data, site_plan_bytes)
+    _fill_phasing(doc, data)
+    _fill_people(doc, data, org_chart_bytes)
+    _fill_activities(doc, data)
+    _fill_devices_and_infrastructure(doc, data)
+    _fill_process_quality_records(doc, data)
+    _set_update_fields(doc)
 
     output = BytesIO()
     doc.save(output)
     return output.getvalue()
-

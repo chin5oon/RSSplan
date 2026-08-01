@@ -7,11 +7,22 @@ Microsoft Word report.
 ## Features
 
 - Eight-step workflow from project definition to QP(S) sign-off
+- Grouped activity selector covering the structural-work checklists, bored
+  tunnelling, material tests and fabrication-yard supervision in the older Site
+  Supervision Plan guide
 - Activity suitability matrix with alternative-approach justification
-- Phased implementation guidance (15% / 30% / 50%)
-- People, technology, contingency, quality and records sections
+- Multiple implementation phases within the same activity, including progress
+  ranges, RSS extent, parallel supervision, phase gates and QP(S) review points
+- Organisation-chart image upload and structured, evidence-backed competency
+  verification
+- Reusable people, technology, control and record profiles; activities refer to
+  a selected profile and record only activity-specific requirements or
+  variations
+- Project-wide phasing, people, technology, controls and records remain in the
+  BCA plan sections without repeating the same prose in every activity
 - Readiness checks before export
-- Native `.docx` report and editable `.json` working-file downloads
+- Native `.docx` report generated from the supplied BCA template, plus editable
+  `.json` working-file downloads
 - Optional overall site-plan image
 
 ## Run locally
@@ -29,6 +40,8 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+Node.js is not required for the Streamlit version.
+
 ## Deploy on Streamlit Community Cloud
 
 1. Push this folder to a GitHub repository.
@@ -43,4 +56,3 @@ Remote Site Supervision Version 2.0 (June 2026) and references the Guide Book
 for Site Supervision Plan Version 1.1 (October 2023). It supports preparation
 but does not replace the QP(S)'s professional judgement, statutory duties,
 review of approved plans, or verification of the latest BCA requirements.
-
