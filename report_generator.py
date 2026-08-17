@@ -231,7 +231,7 @@ def _competency_summary(team: dict[str, Any]) -> str:
 PROFILE_FIELDS = {
     "people": [
         ("Site supervisors", "site_supervisors"),
-        ("Builder-side operators", "builder_operators"),
+        ("RSS operators (workers from Builder side)", "builder_operators"),
         ("Backup personnel", "backup_personnel"),
         ("Deployment / handover notes", "notes"),
     ],
@@ -253,7 +253,8 @@ PROFILE_FIELDS = {
         ("Close-out", "after"),
         ("Communication", "communication"),
         ("Stop-work / in-person trigger", "stop_work"),
-        ("Technology failure", "tech_failure"),
+        ("Technology failure and equipment malfunction", "tech_failure"),
+        ("Poor connectivity or communication breakdown", "poor_connectivity"),
         ("Poor evidence", "poor_evidence"),
         ("Safety incident", "safety_incident"),
         ("Non-conformity", "non_conformity"),
@@ -429,19 +430,43 @@ def _fill_people(
     team = data.get("team", {})
     cell = doc.tables[6].cell(0, 0)
     _clear_cell(cell)
-    _add_subheading(cell, "3.1. RSS Team Structure")
-    _add_label_value(cell, "Organisation and reporting lines", team.get("organisation"))
+    _add_subheading(cell, "3.1. Manpower Organisation Chart")
+    _add_label_value(cell, "Manpower hierarchy and reporting lines", team.get("organisation"))
     _add_picture(
         cell,
         org_chart_bytes,
-        "Figure 2: RSS Team Organisation and Reporting Lines",
-        "Optional: insert organisation / reporting-line chart.",
+        "Figure 2: RSS Manpower Organisation Chart",
+        "Optional: insert manpower organisation chart.",
         width=5.2,
     )
     _add_subheading(cell, "3.2. Roles and Responsibilities")
     _add_label_value(cell, "Qualified Person (Supervision)", team.get("qp_name"))
+    _add_label_value(
+        cell,
+        "QP(S) roles and responsibilities",
+        team.get("qp_responsibilities"),
+    )
     _add_label_value(cell, "Site supervisors (RE/RTO)", team.get("site_supervisors"))
-    _add_label_value(cell, "Builder-side RSS operators", team.get("builder_operators"))
+    _add_label_value(
+        cell,
+        "Site Supervisor (RE/RTO) roles and responsibilities",
+        team.get("site_supervisor_responsibilities"),
+    )
+    _add_label_value(
+        cell,
+        "RSS operators (workers from Builder side)",
+        team.get("builder_operators"),
+    )
+    _add_label_value(
+        cell,
+        "RSS operator roles and responsibilities",
+        team.get("rss_operator_responsibilities"),
+    )
+    _add_label_value(
+        cell,
+        "Safety oversight and escalation responsibilities",
+        team.get("safety_oversight_responsibilities"),
+    )
     _add_label_value(cell, "Backup personnel and handover", team.get("backup_personnel"))
     _add_subheading(cell, "3.3. Training and Competency Requirements")
     _add_label_value(cell, "Training programme", team.get("training"))
@@ -450,7 +475,7 @@ def _fill_people(
         cell,
         data,
         "people",
-        "3.4. Reusable Personnel Deployment Profiles",
+        "3.4. Reusable Manpower Deployment Profiles",
     )
 
 
@@ -493,7 +518,7 @@ def _fill_activities(doc: Document, data: dict[str, Any]) -> None:
                 ),
                 ("Selected approach", activity.get("approach")),
                 (
-                    "Assigned people profile",
+                    "Assigned manpower deployment profile",
                     _profile_reference(
                         data, "people", activity.get("people_profile_id")
                     ),
@@ -507,7 +532,7 @@ def _fill_activities(doc: Document, data: dict[str, Any]) -> None:
                     ),
                 ),
                 (
-                    "Assigned control profile",
+                    "Assigned process and contingency profile",
                     _profile_reference(
                         data, "controls", activity.get("control_profile_id")
                     ),
@@ -519,7 +544,7 @@ def _fill_activities(doc: Document, data: dict[str, Any]) -> None:
                     ),
                 ),
                 (
-                    "Personnel requirements / variation",
+                    "Manpower requirements / competency variation",
                     activity.get("personnel_requirements"),
                 ),
                 ("Evidence requirements", activity.get("evidence")),
@@ -598,7 +623,7 @@ def _fill_devices_and_infrastructure(doc: Document, data: dict[str, Any]) -> Non
         infrastructure,
         data,
         "technology",
-        "Reusable Technology Profiles",
+        "Reusable Technology Arrangement Profiles",
     )
 
 
@@ -622,17 +647,35 @@ def _fill_process_quality_records(doc: Document, data: dict[str, Any]) -> None:
         process_cell,
         data,
         "controls",
-        "Reusable Control Profiles",
+        "Reusable Process and Contingency Profiles",
     )
 
     quality = doc.tables[11].cell(0, 0)
     _clear_cell(quality)
+    _add_subheading(quality, "Contingency Planning")
     for label, value in (
-        ("Stop-work / in-person trigger", process.get("stop_work")),
-        ("Technology failure", process.get("tech_failure")),
+        (
+            "Conditions for stopping RSS / reverting to in-person supervision",
+            process.get("stop_work"),
+        ),
+        (
+            "Technology failure and equipment malfunction",
+            process.get("tech_failure"),
+        ),
+        (
+            "Poor connectivity or communication breakdown",
+            process.get("poor_connectivity"),
+        ),
         ("Poor or incomplete evidence", process.get("poor_evidence")),
-        ("Safety incident", process.get("safety_incident")),
-        ("Non-conformity and escalation", process.get("non_conformity")),
+        ("Safety incidents during remote supervision", process.get("safety_incident")),
+        (
+            "Non-conformity detection and escalation procedures",
+            process.get("non_conformity"),
+        ),
+    ):
+        _add_label_value(quality, label, value)
+    _add_subheading(quality, "Verification, Audit and Performance Monitoring")
+    for label, value in (
         ("Verification plan", records.get("verification")),
         ("Audits / management review", records.get("audits")),
         ("Performance monitoring", records.get("performance")),
@@ -653,7 +696,7 @@ def _fill_process_quality_records(doc: Document, data: dict[str, Any]) -> None:
         record_cell,
         data,
         "records",
-        "Reusable Record Profiles",
+        "Reusable Documentation and Record Profiles",
     )
 
     signoff = data.get("signoff", {})

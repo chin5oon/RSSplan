@@ -26,6 +26,10 @@ class ReportGeneratorTest(unittest.TestCase):
                 "company": "Example Consultants",
                 "prepared_date": "2026-08-01",
                 "organisation": "QP(S) → RE → RTO → Builder operator",
+                "qp_responsibilities": "Approve the RSS plan and sign off reports.",
+                "site_supervisor_responsibilities": "Conduct RSS and assess conformity.",
+                "rss_operator_responsibilities": "Operate equipment and capture evidence.",
+                "safety_oversight_responsibilities": "Stop work and escalate incidents.",
                 "site_supervisors": "Er Resident (RE)",
                 "builder_operators": "Site operator",
                 "backup_personnel": "Named trained backup",
@@ -67,6 +71,7 @@ class ReportGeneratorTest(unittest.TestCase):
                 "communication": "Repeat back critical instructions.",
                 "stop_work": "Stop if visibility or intervention is inadequate.",
                 "tech_failure": "Use backup, then revert in person.",
+                "poor_connectivity": "Use backup connectivity or revert in person.",
                 "poor_evidence": "Reject and repeat.",
                 "safety_incident": "Suspend and follow emergency plan.",
                 "non_conformity": "Record, rectify and verify closure.",
@@ -125,7 +130,7 @@ class ReportGeneratorTest(unittest.TestCase):
                     "location": "Block A, Level 2",
                     "complexity": "Simple",
                     "frequency": "Continuous",
-                    "approach": "Live remote supervision",
+                    "approach": "Live Remote Supervision",
                     "people_profile_id": "P2",
                     "technology_profile_id": "T1",
                     "control_profile_id": "C1",
@@ -180,6 +185,8 @@ class ReportGeneratorTest(unittest.TestCase):
         self.assertIn("PROJECT BACKGROUND", all_text)
         self.assertIn("A1234-TEST", table_text)
         self.assertIn("TR-001 and RSS-TRIAL-01", table_text)
+        self.assertIn("Approve the RSS plan and sign off reports.", table_text)
+        self.assertIn("Poor connectivity or communication breakdown", table_text)
         self.assertIn("Concreting works", table_text)
         self.assertIn("P2 - Concrete deployment team", document_xml)
         self.assertIn("30% to 75% of the activity", document_xml)

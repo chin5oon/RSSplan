@@ -7,17 +7,20 @@ Microsoft Word report.
 ## Features
 
 - Eight-step workflow from project definition to QP(S) sign-off
-- Flat supervision-activity selector: individual structural-checklist
-  activities plus bored tunnelling, material-test, fabrication-yard and
-  project-specific activities from the older Site Supervision Plan guide
+- Fixed supervision-activity selector: individual structural-checklist,
+  bored-tunnelling, material-test and fabrication-yard activities from the
+  supplied guidance, with no free-text activity option
 - Activity suitability matrix with alternative-approach justification
 - Multiple implementation phases within the same activity, including progress
   ranges, RSS extent, parallel supervision, phase gates and QP(S) review points
-- Organisation-chart image upload and structured, evidence-backed competency
-  verification
-- Reusable people, technology, control and record profiles; activities refer to
-  a selected profile and record only activity-specific requirements or
-  variations
+- Manpower organisation chart, explicit roles and responsibilities, and
+  structured, evidence-backed competency verification
+- Plain-language reusable manpower, technology, process/contingency and record
+  profiles; activities refer to a selected profile and record only
+  activity-specific requirements or variations
+- Required-field navigation alerts before moving forward with an incomplete step
+- Phase shortcuts to follow the previous activity or use Activity 1 for all
+  activities
 - Project-wide phasing, people, technology, controls and records remain in the
   BCA plan sections without repeating the same prose in every activity
 - Readiness checks before export

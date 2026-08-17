@@ -20,7 +20,7 @@ st.set_page_config(
 
 STEPS = [
     "1 - Project",
-    "2 - People",
+    "2 - Manpower & organisation",
     "3 - Phasing framework",
     "4 - Technology",
     "5 - Controls",
@@ -89,22 +89,28 @@ STRUCTURAL_SUPERVISION_ACTIVITIES = LEGACY_ACTIVITY_GROUPS[
     "Structural supervision checklists"
 ]
 
-SUPERVISION_ACTIVITIES = [
-    *STRUCTURAL_SUPERVISION_ACTIVITIES,
-    "Bored tunnelling",
-    "Material tests - structural concrete",
-    "Material tests - post-tensioning",
-    "Material tests - structural steelworks",
-    "Fabrication-yard supervision",
-    "Project-specific",
-]
+SUPERVISION_ACTIVITIES = list(
+    dict.fromkeys(
+        activity
+        for group, activities in LEGACY_ACTIVITY_GROUPS.items()
+        if group != "Project-specific"
+        for activity in activities
+    )
+)
 
 APPROACHES = [
-    "Technology replacement",
-    "Evidence-based supervision",
-    "Live remote supervision",
-    "In-person attendance",
+    "Technology Replacement",
+    "Evidence-Based Supervision",
+    "Live Remote Supervision",
+    "In-Person Attendance",
 ]
+
+LEGACY_APPROACHES = {
+    "Technology replacement": "Technology Replacement",
+    "Evidence-based supervision": "Evidence-Based Supervision",
+    "Live remote supervision": "Live Remote Supervision",
+    "In-person attendance": "In-Person Attendance",
+}
 
 DEFAULTS = {
     "project": {
@@ -123,6 +129,10 @@ DEFAULTS = {
         "company": "",
         "prepared_date": date.today().isoformat(),
         "organisation": "",
+        "qp_responsibilities": "",
+        "site_supervisor_responsibilities": "",
+        "rss_operator_responsibilities": "",
+        "safety_oversight_responsibilities": "",
         "site_supervisors": "",
         "builder_operators": "",
         "backup_personnel": "",
@@ -163,7 +173,8 @@ DEFAULTS = {
         "after": "Confirm inspection scope and outcome; save evidence; update the inspection register; assign follow-up actions; distribute and archive records.",
         "communication": "Use standard terminology, repeat back critical instructions, keep authorised participants visible where practicable, and record decisions with timestamps.",
         "stop_work": "Stop or suspend remote supervision when the QP(S)/site supervisor cannot clearly verify the works, cannot intervene effectively, or observes a safety or quality risk.",
-        "tech_failure": "Switch to tested backup equipment/connectivity. If adequate visibility or communication cannot be restored, revert to in-person supervision and record the incident.",
+        "tech_failure": "Switch to tested backup equipment. If adequate supervision cannot be restored, revert to in-person supervision and record the incident.",
+        "poor_connectivity": "Switch to backup connectivity or another suitable supervision approach. Reschedule or revert to in-person supervision if communication quality is inadequate, and document the disruption.",
         "poor_evidence": "Reject unclear, incomplete or untraceable evidence; repeat the inspection or attend in person before accepting the works.",
         "safety_incident": "Prioritise site emergency procedures, suspend RSS, notify the responsible parties and QP(S), and preserve the incident record.",
         "non_conformity": "Record the issue, notify the QP(S), prevent concealment or continuation where required, track rectification, and verify closure before acceptance.",
@@ -218,6 +229,7 @@ DEFAULTS = {
                 "communication": "",
                 "stop_work": "",
                 "tech_failure": "",
+                "poor_connectivity": "",
                 "poor_evidence": "",
                 "safety_incident": "",
                 "non_conformity": "",
@@ -320,7 +332,7 @@ def new_activity() -> dict:
         "location": "",
         "complexity": "Simple",
         "frequency": "Periodic",
-        "approach": "Technology replacement",
+        "approach": "Technology Replacement",
         "implementation_phases": [new_implementation_phase()],
         "people_profile_id": "P1",
         "technology_profile_id": "T1",
@@ -378,6 +390,9 @@ def migrate_plan(plan: dict) -> dict:
         for position, phase in enumerate(activity["implementation_phases"]):
             _merge_missing(phase, new_implementation_phase(position))
         activity["work_type"] = flatten_legacy_activity(activity)
+        activity["approach"] = LEGACY_APPROACHES.get(
+            activity.get("approach"), activity.get("approach", APPROACHES[0])
+        )
         activity.pop("category", None)
         for kind, assignment_key in PROFILE_ASSIGNMENT_KEYS.items():
             available_ids = {
@@ -399,7 +414,13 @@ def new_profile(kind: str, plan: dict) -> dict:
     while f"{prefix}{number}" in used:
         number += 1
     template["id"] = f"{prefix}{number}"
-    template["name"] = f"Alternative {kind.title()} profile {number}"
+    profile_kind = {
+        "people": "manpower deployment",
+        "technology": "technology arrangement",
+        "controls": "process and contingency",
+        "records": "documentation and records",
+    }[kind]
+    template["name"] = f"Alternative {profile_kind} profile {number}"
     template["default"] = False
     return template
 
@@ -415,45 +436,29 @@ def flatten_legacy_activity(activity: dict) -> str:
         and work_type in STRUCTURAL_SUPERVISION_ACTIVITIES
     ):
         return work_type
-    if category in SUPERVISION_ACTIVITIES:
-        if category == "Project-specific" and work_type not in (
-            "",
-            "Other / project-specific supervision activity",
-        ):
-            activity["custom_activity_name"] = (
-                activity.get("custom_activity_name") or work_type
-            )
-        return category
     for legacy_group, legacy_activities in LEGACY_ACTIVITY_GROUPS.items():
         if work_type in legacy_activities:
-            if legacy_group == "Structural supervision checklists":
+            if legacy_group != "Project-specific":
                 return work_type
-            if legacy_group == "Project-specific":
-                activity.setdefault("custom_activity_name", "")
-            return legacy_group
-    if work_type:
-        activity["custom_activity_name"] = activity.get("custom_activity_name") or work_type
-        return "Project-specific"
+    # Older working files may contain a broad group or a project-specific value.
+    # Keep the text in the JSON, but require the user to choose a supported list item.
+    if work_type and work_type not in SUPERVISION_ACTIVITIES:
+        activity["legacy_work_type"] = work_type
     return ""
 
 
 def activity_display_name(activity: dict) -> str:
-    if activity.get("work_type") == "Project-specific":
-        return (
-            activity.get("custom_activity_name", "").strip()
-            or "Project-specific activity"
-        )
     return activity.get("work_type", "").strip()
 
 
 def recommended_approach(complexity: str, frequency: str) -> str:
     if complexity == "Simple" and frequency == "Periodic":
-        return "Technology replacement"
+        return "Technology Replacement"
     if complexity == "Complex" and frequency == "Periodic":
-        return "Evidence-based supervision"
+        return "Evidence-Based Supervision"
     if complexity == "Simple" and frequency == "Continuous":
-        return "Live remote supervision"
-    return "In-person attendance"
+        return "Live Remote Supervision"
+    return "In-Person Attendance"
 
 
 def initialise() -> None:
@@ -466,6 +471,19 @@ def initialise() -> None:
         or st.session_state.current_step not in STEPS
     ):
         st.session_state.current_step = STEPS[0]
+    destination = st.session_state.pop("_navigation_destination", None)
+    if destination in STEPS:
+        st.session_state.current_step = destination
+        st.session_state.sidebar_step = destination
+    if (
+        "sidebar_step" not in st.session_state
+        or st.session_state.sidebar_step not in STEPS
+    ):
+        st.session_state.sidebar_step = st.session_state.current_step
+    if "navigation_alert" not in st.session_state:
+        st.session_state.navigation_alert = []
+    if "pending_step" not in st.session_state:
+        st.session_state.pending_step = None
     if "site_plan_bytes" not in st.session_state:
         st.session_state.site_plan_bytes = None
     if "org_chart_bytes" not in st.session_state:
@@ -485,7 +503,7 @@ def text_area(section: str, key: str, label: str, height: int = 100) -> None:
 PROFILE_FIELD_LABELS = {
     "people": [
         ("site_supervisors", "Site supervisors assigned"),
-        ("builder_operators", "Builder-side operators assigned"),
+        ("builder_operators", "RSS operators (workers from Builder side) assigned"),
         ("backup_personnel", "Backup personnel assigned"),
         ("notes", "Deployment / handover notes"),
     ],
@@ -508,6 +526,7 @@ PROFILE_FIELD_LABELS = {
         ("communication", "Communication variation"),
         ("stop_work", "Stop-work / in-person trigger variation"),
         ("tech_failure", "Technology-failure variation"),
+        ("poor_connectivity", "Connectivity / communication variation"),
         ("poor_evidence", "Poor-evidence variation"),
         ("safety_incident", "Safety-incident variation"),
         ("non_conformity", "Non-conformity variation"),
@@ -524,6 +543,20 @@ PROFILE_FIELD_LABELS = {
     ],
 }
 
+PROFILE_TITLES = {
+    "people": "manpower deployment",
+    "technology": "technology arrangement",
+    "controls": "process and contingency",
+    "records": "documentation and records",
+}
+
+PROFILE_EXAMPLES = {
+    "people": "a different RE/RTO and RSS operator team for precast-yard work",
+    "technology": "a different camera, connectivity or measurement setup",
+    "controls": "different preparation steps, hold points or contingency procedures",
+    "records": "different evidence handling, verification or retention rules",
+}
+
 
 def profile_label(plan: dict, kind: str, profile_id: str) -> str:
     for profile in plan.get("profiles", {}).get(kind, []):
@@ -538,17 +571,33 @@ def phase_label(phase: dict) -> str:
     return phase.get("name", "").strip() or "Unnamed phase"
 
 
+def clone_implementation_phases(phases: list[dict]) -> list[dict]:
+    """Copy phase content while assigning fresh widget-safe identifiers."""
+    copied = json.loads(json.dumps(phases))
+    for phase in copied:
+        phase["uid"] = uuid4().hex[:10]
+    return copied
+
+
 def render_profile_manager(kind: str, description: str) -> None:
     plan = st.session_state.plan
     profiles = plan["profiles"][kind]
-    st.markdown(f"#### Reusable {kind.title()} profiles")
+    title = PROFILE_TITLES[kind]
+    st.markdown(f"#### Reusable {title} profiles")
+    st.info(
+        "**What is a reusable profile?** It is a saved set of project arrangements "
+        "that can be assigned to one or more activities in Step 7. Enter the common "
+        "arrangement once, then create another profile only when an activity needs "
+        f"{PROFILE_EXAMPLES[kind]}. This avoids repeating the same information."
+    )
     st.caption(description)
     for profile in list(profiles):
         profile_id = profile["id"]
         if profile.get("default"):
             st.info(
-                f"**{profile_id} - {profile['name']}** uses the project-wide "
-                f"{kind} information entered above."
+                f"**{profile_id} - {profile['name']}** is the default profile. "
+                "Activities use the project-wide information entered above unless "
+                "you assign them a different profile in Step 7."
             )
             continue
         with st.expander(
@@ -586,12 +635,76 @@ def render_profile_manager(kind: str, description: str) -> None:
                         activity[assignment_key] = default_id
                 st.rerun()
     if st.button(
-        f"+ Add {kind} profile",
+        f"+ Add {title} profile",
         key=f"add_profile_{kind}",
         type="secondary",
     ):
         profiles.append(new_profile(kind, plan))
         st.rerun()
+
+
+def issues_for_step(plan: dict, step_index: int) -> list[str]:
+    return [message for issue_step, message in validate(plan) if issue_step == step_index]
+
+
+def request_navigation(target_step: str, *, check_required: bool = True) -> bool:
+    """Queue navigation or show an explicit incomplete-required-fields prompt."""
+    current_step = st.session_state.current_step
+    current_index = STEPS.index(current_step)
+    target_index = STEPS.index(target_step)
+    issues = issues_for_step(st.session_state.plan, current_index)
+    if check_required and target_index > current_index and issues:
+        st.session_state.pending_step = target_step
+        st.session_state.navigation_alert = issues
+        return False
+    st.session_state.pending_step = None
+    st.session_state.navigation_alert = []
+    st.session_state._navigation_destination = target_step
+    return True
+
+
+def handle_sidebar_navigation() -> None:
+    requested = st.session_state.sidebar_step
+    current = st.session_state.current_step
+    if requested == current:
+        return
+    if STEPS.index(requested) > STEPS.index(current):
+        issues = issues_for_step(st.session_state.plan, STEPS.index(current))
+        if issues:
+            st.session_state.pending_step = requested
+            st.session_state.navigation_alert = issues
+            st.session_state.sidebar_step = current
+            return
+    st.session_state.current_step = requested
+    st.session_state.pending_step = None
+    st.session_state.navigation_alert = []
+
+
+def render_navigation_alert() -> None:
+    issues = st.session_state.get("navigation_alert", [])
+    target = st.session_state.get("pending_step")
+    if not issues or target not in STEPS:
+        return
+    st.warning(
+        f"Complete the compulsory fields marked * before moving to **{target}**, "
+        "or explicitly continue with an incomplete draft."
+    )
+    for issue in issues:
+        st.write(f"- {issue}")
+    stay, proceed = st.columns(2)
+    with stay:
+        if st.button("Stay and complete the fields", use_container_width=True):
+            st.session_state.pending_step = None
+            st.session_state.navigation_alert = []
+            st.rerun()
+    with proceed:
+        if st.button(
+            "Continue with incomplete fields",
+            type="secondary",
+            use_container_width=True,
+        ):
+            request_navigation(target, check_required=False)
+            st.rerun()
 
 
 def validate(plan: dict) -> list[tuple[int, str]]:
@@ -609,18 +722,11 @@ def validate(plan: dict) -> list[tuple[int, str]]:
     if not plan["activities"]:
         issues.append((activity_step, "Add at least one structural activity."))
     for index, activity in enumerate(plan["activities"], start=1):
-        if not activity.get("work_type", "").strip():
-            issues.append(
-                (activity_step, f"Select the supervision activity for activity {index}.")
-            )
-        if (
-            activity.get("work_type") == "Project-specific"
-            and not activity.get("custom_activity_name", "").strip()
-        ):
+        if activity.get("work_type", "").strip() not in SUPERVISION_ACTIVITIES:
             issues.append(
                 (
                     activity_step,
-                    f"Name the project-specific supervision activity for activity {index}.",
+                    f"Select a listed supervision activity for activity {index}.",
                 )
             )
         if not activity["description"].strip() or not activity["location"].strip():
@@ -669,10 +775,11 @@ def validate(plan: dict) -> list[tuple[int, str]]:
                 for profile in plan.get("profiles", {}).get(kind, [])
             }
             if activity.get(assignment_key) not in available_ids:
+                profile_name = PROFILE_TITLES[kind]
                 issues.append(
                     (
                         activity_step,
-                        f"Select a valid {kind} profile for activity {index}.",
+                        f"Select a valid {profile_name} profile for activity {index}.",
                     )
                 )
         if not activity["annex_d_reviewed"]:
@@ -688,8 +795,26 @@ def validate(plan: dict) -> list[tuple[int, str]]:
     team = plan["team"]
     if not team["qp_name"].strip() or not team["pe_number"].strip():
         issues.append((1, "Enter the QP(S) name and PE registration number."))
-    if not team["site_supervisors"].strip() or not team["backup_personnel"].strip():
-        issues.append((1, "Complete site supervision and backup arrangements."))
+    if not team.get("organisation", "").strip():
+        issues.append((1, "Describe the manpower hierarchy and reporting lines."))
+    if any(
+        not team.get(key, "").strip()
+        for key in (
+            "site_supervisors",
+            "builder_operators",
+            "backup_personnel",
+        )
+    ):
+        issues.append((1, "Complete the manpower and backup assignments."))
+    if any(
+        not team.get(key, "").strip()
+        for key in (
+            "qp_responsibilities",
+            "site_supervisor_responsibilities",
+            "rss_operator_responsibilities",
+        )
+    ):
+        issues.append((1, "Complete the required roles and responsibilities."))
     if not team["training"].strip():
         issues.append((1, "Complete the RSS training programme."))
     competency_checks = (
@@ -719,6 +844,18 @@ def validate(plan: dict) -> list[tuple[int, str]]:
         for key in ("live_devices", "connectivity", "backup_connectivity", "storage")
     ):
         issues.append((3, "Complete devices, connectivity, backup and storage."))
+    process = plan["process"]
+    if any(
+        not process.get(key, "").strip()
+        for key in (
+            "stop_work",
+            "tech_failure",
+            "poor_connectivity",
+            "safety_incident",
+            "non_conformity",
+        )
+    ):
+        issues.append((4, "Complete all compulsory contingency procedures."))
     for kind, step_index in (
         ("people", 1),
         ("technology", 3),
@@ -798,11 +935,28 @@ def render_activities() -> None:
         "workmanship, site conditions, visibility or intervention capability is inadequate."
     )
     st.caption(
-        "Select one supervision activity from the flat guide-based list, assign "
-        "reusable project profiles, and record only activity-specific variations. "
+        "Select one supervision activity from the Guidebook-based list, assign "
+        "reusable project arrangements, and record only activity-specific variations. "
         "Each activity can have several implementation phases."
     )
     plan = st.session_state.plan
+    if len(plan["activities"]) > 1:
+        st.markdown("#### Phase implementation shortcuts")
+        st.caption(
+            "Copying replaces the destination phase entries. You can edit any copied "
+            "entry afterwards."
+        )
+        if st.button(
+            "Make implementation phases the same for all activities (use Activity 1)",
+            type="secondary",
+        ):
+            source_phases = plan["activities"][0]["implementation_phases"]
+            for other_activity in plan["activities"][1:]:
+                other_activity["implementation_phases"] = clone_implementation_phases(
+                    source_phases
+                )
+            st.success("Activity 1 implementation phases were copied to all activities.")
+            st.rerun()
     for index, activity in enumerate(plan["activities"]):
         activity_id = activity["uid"]
         selected_name = activity_display_name(activity) or "Select an activity"
@@ -827,12 +981,6 @@ def render_activities() -> None:
                     )
                     or ""
                 )
-                if activity["work_type"] == "Project-specific":
-                    activity["custom_activity_name"] = st.text_input(
-                        "Project-specific activity name *",
-                        activity.get("custom_activity_name", ""),
-                        key=f"custom_activity_{activity_id}",
-                    )
                 activity["location"] = st.text_input(
                     "Location / element IDs *",
                     activity["location"],
@@ -840,16 +988,18 @@ def render_activities() -> None:
                 )
             with col2:
                 activity["complexity"] = st.selectbox(
-                    "Inspection complexity",
+                    "Complexity of supervision",
                     ["Simple", "Complex"],
                     index=["Simple", "Complex"].index(activity["complexity"]),
                     key=f"complexity_{activity_id}",
+                    format_func=lambda value: f"{value} inspection",
                 )
                 activity["frequency"] = st.selectbox(
-                    "Supervision frequency",
+                    "Frequency of supervision",
                     ["Periodic", "Continuous"],
                     index=["Periodic", "Continuous"].index(activity["frequency"]),
                     key=f"frequency_{activity_id}",
+                    format_func=lambda value: f"{value} inspection",
                 )
             activity["description"] = st.text_area(
                 "Scope of supervision *",
@@ -877,13 +1027,18 @@ def render_activities() -> None:
                     key=f"deviation_{activity_id}",
                 )
 
-            st.markdown("##### Project-profile assignments")
+            st.markdown("##### Reusable arrangement assignments")
+            st.caption(
+                "Each selection points to information entered once in the relevant "
+                "earlier step. Choose an alternative profile only when this activity "
+                "uses a different arrangement."
+            )
             assignment_columns = st.columns(4)
             assignment_labels = {
-                "people": "People",
-                "technology": "Technology",
-                "controls": "Controls",
-                "records": "Records",
+                "people": "Manpower deployment",
+                "technology": "Technology arrangement",
+                "controls": "Process & contingency",
+                "records": "Documentation & records",
             }
             for column, kind in zip(assignment_columns, assignment_labels):
                 profiles = plan["profiles"][kind]
@@ -909,10 +1064,13 @@ def render_activities() -> None:
             req1, req2 = st.columns(2)
             with req1:
                 activity["personnel_requirements"] = st.text_area(
-                    "Personnel assignment / competency variation",
+                    "Manpower assignment / competency variation",
                     activity.get("personnel_requirements", ""),
                     key=f"personnel_requirements_{activity_id}",
-                    placeholder="Optional - leave blank when the selected people profile applies.",
+                    placeholder=(
+                        "Optional - leave blank when the selected manpower deployment "
+                        "profile applies."
+                    ),
                 )
                 activity["evidence"] = st.text_area(
                     "Evidence and minimum capture *",
@@ -943,6 +1101,18 @@ def render_activities() -> None:
                 "Add every phase that applies to this activity. Progression is "
                 "activity-specific and remains subject to the project-wide gates."
             )
+            if index > 0 and st.button(
+                "Follow previous activity's implementation phases",
+                key=f"copy_previous_phases_{activity_id}",
+                help=(
+                    "Replaces this activity's phase entries with a copy of the "
+                    "immediately preceding activity's entries."
+                ),
+            ):
+                activity["implementation_phases"] = clone_implementation_phases(
+                    plan["activities"][index - 1]["implementation_phases"]
+                )
+                st.rerun()
             phases = activity["implementation_phases"]
             for phase_index, phase in enumerate(list(phases)):
                 phase_id = phase["uid"]
@@ -1042,7 +1212,7 @@ def render_activities() -> None:
                 st.rerun()
 
             activity["annex_d_reviewed"] = st.checkbox(
-                "Applicable Annex D baseline and limitations reviewed",
+                "Applicable Annex D baseline and limitations reviewed *",
                 value=activity["annex_d_reviewed"],
                 key=f"annex_d_{activity_id}",
             )
@@ -1057,7 +1227,7 @@ def render_activities() -> None:
 
 
 def render_people() -> None:
-    st.subheader("Make accountability explicit")
+    st.subheader("Define the manpower organisation, roles and competency")
     st.info(
         "Remote tools support - but do not transfer - the QP(S)'s professional responsibility."
     )
@@ -1071,8 +1241,14 @@ def render_people() -> None:
         )
     with c3:
         team["company"] = st.text_input("Company", team["company"])
+
+    st.markdown("#### Manpower organisation chart")
+    st.caption(
+        "Include the QP(S), Site Supervisors (RE/RTO), RSS operators (workers from "
+        "Builder side), backup personnel and the reporting/escalation path."
+    )
     team["organisation"] = st.text_area(
-        "Organisation and reporting lines",
+        "Manpower hierarchy and reporting lines *",
         team["organisation"],
         key="team_organisation",
         help=(
@@ -1081,7 +1257,7 @@ def render_people() -> None:
         ),
     )
     org_chart = st.file_uploader(
-        "Organisation / reporting-line chart (optional image)",
+        "Manpower organisation chart (optional image)",
         type=["png", "jpg", "jpeg"],
         key="org_chart_upload",
         help=(
@@ -1093,18 +1269,64 @@ def render_people() -> None:
         st.session_state.org_chart_bytes = org_chart.getvalue()
         st.image(
             org_chart,
-            caption="RSS team organisation and reporting lines",
+            caption="RSS manpower organisation chart",
             width=560,
         )
 
+    st.markdown("#### Manpower assignments")
     for key, label in (
         ("site_supervisors", "Site supervisors (RE/RTO) *"),
-        ("builder_operators", "Builder-side RSS operators"),
+        ("builder_operators", "RSS operators (workers from Builder side) *"),
         ("backup_personnel", "Backup personnel and handover *"),
-        ("training", "Training programme *"),
     ):
         team[key] = st.text_area(label, team.get(key, ""), key=f"team_{key}")
 
+    st.markdown("#### Roles and responsibilities")
+    responsibility_fields = (
+        (
+            "qp_responsibilities",
+            "Qualified Person (Supervision) roles and responsibilities *",
+            "e.g. overall RSS responsibility, approval, effectiveness review, final sign-off and liaison with authorities",
+        ),
+        (
+            "site_supervisor_responsibilities",
+            "Site Supervisor (RE/RTO) roles and responsibilities *",
+            "e.g. conduct supervision, direct the RSS operator, intervene, assess conformity and complete records",
+        ),
+        (
+            "rss_operator_responsibilities",
+            "RSS operator roles and responsibilities *",
+            "e.g. operate assigned equipment, follow instructions, identify elements and capture required evidence",
+        ),
+        (
+            "safety_oversight_responsibilities",
+            "Safety oversight and escalation responsibilities",
+            "e.g. stop-work authority, emergency response and escalation path to the QP(S)",
+        ),
+    )
+    for start in range(0, len(responsibility_fields), 2):
+        columns = st.columns(2)
+        for column, (key, label, placeholder) in zip(
+            columns, responsibility_fields[start : start + 2]
+        ):
+            with column:
+                team[key] = st.text_area(
+                    label,
+                    team.get(key, ""),
+                    key=f"team_{key}",
+                    placeholder=placeholder,
+                )
+
+    st.markdown("#### Training and competency requirements")
+    team["training"] = st.text_area(
+        "Site supervision team training programme *",
+        team.get("training", ""),
+        key="team_training",
+        placeholder=(
+            "Cover digital tools and platforms, RSS procedures, safety, assigned "
+            "equipment, and documentation/evidence collection."
+        ),
+    )
     st.markdown("#### Competency verification")
     st.caption(
         "This should not be only one tick. The checks confirm the required basis, "
@@ -1113,12 +1335,12 @@ def render_people() -> None:
     check_col1, check_col2 = st.columns(2)
     with check_col1:
         team["competency_provider_training"] = st.checkbox(
-            "Relevant technology-provider training completed",
+            "Relevant technology-provider training completed *",
             value=team.get("competency_provider_training", False),
             help="For the actual hardware/software used on this project.",
         )
         team["competency_trial"] = st.checkbox(
-            "Proficiency demonstrated during an RSS trial",
+            "Proficiency demonstrated during an RSS trial *",
             value=team.get("competency_trial", False),
             help=(
                 "The RE/RTO should demonstrate the complete workflow, not only "
@@ -1127,11 +1349,11 @@ def render_people() -> None:
         )
     with check_col2:
         team["competency_registration"] = st.checkbox(
-            "Professional registration / project appointment checked",
+            "Professional registration / project appointment checked *",
             value=team.get("competency_registration", False),
         )
         team["competency_upgrade_training"] = st.checkbox(
-            "Refresher training arranged for software/hardware upgrades",
+            "Refresher training arranged for software/hardware upgrades *",
             value=team.get("competency_upgrade_training", False),
         )
     team["competency_evidence"] = st.text_area(
@@ -1159,9 +1381,9 @@ def render_people() -> None:
         )
     render_profile_manager(
         "people",
-        "P1 uses the master personnel and competency information above. Add a "
-        "profile only when an activity uses a different deployment team; blank "
-        "fields inherit the project default.",
+        "P1 uses the project-wide manpower and competency information above. Add a "
+        "profile only when an activity uses a different deployment team; blank fields "
+        "inherit P1.",
     )
 
 
@@ -1185,10 +1407,11 @@ def render_phasing() -> None:
         ("review_cadence", "Review and adjustment cadence"),
     ):
         text_area("phases", key, label)
-    st.markdown("#### Activity phase coverage")
-    st.caption(
-        "The detailed phase entries are maintained within each activity. This "
-        "summary shows whether the project framework has been applied."
+    st.markdown("#### Activity phase coverage - automatic summary")
+    st.info(
+        "**This table is not filled in here.** It is populated automatically from "
+        "the **Implementation phases** fields inside each activity in Step 7. Use it "
+        "to check which activities have phase entries after those details are completed."
     )
     rows = []
     for index, activity in enumerate(st.session_state.plan["activities"], start=1):
@@ -1199,11 +1422,15 @@ def render_phasing() -> None:
                     phase_label(phase)
                     for phase in activity.get("implementation_phases", [])
                 )
-                or "None",
+                or "Not yet configured in Step 7",
+                "Source": "Step 7 - Activities",
             }
         )
     if rows:
         st.dataframe(rows, use_container_width=True, hide_index=True)
+    if st.button("Open activity implementation phases", type="secondary"):
+        request_navigation(STEPS[6])
+        st.rerun()
 
 
 def render_technology() -> None:
@@ -1239,7 +1466,7 @@ def render_technology() -> None:
 
 
 def render_controls() -> None:
-    st.subheader("Define what happens before, during and after")
+    st.subheader("Define RSS procedures and contingency planning")
     st.caption("PREPARE → VERIFY LIVE → DECIDE → RECORD → CLOSE")
     for key, label in (
         ("before", "Before remote supervision"),
@@ -1248,19 +1475,25 @@ def render_controls() -> None:
         ("communication", "Communication protocol"),
     ):
         text_area("process", key, label, 120)
-    st.markdown("#### Hard stops and fallback")
+    st.markdown("#### Quality assurance and risk management")
+    st.caption(
+        "Contingency planning follows Section 6.7.1 of the RSS Guidebook. State how "
+        "the team will respond, escalate, document the event and revert to in-person "
+        "supervision when remote supervision is no longer effective."
+    )
     for key, label in (
-        ("stop_work", "Stop-work / revert-to-site trigger *"),
-        ("tech_failure", "Technology failure *"),
+        ("stop_work", "Conditions for stopping RSS / reverting to in-person supervision *"),
+        ("tech_failure", "Technology failure and equipment malfunction *"),
+        ("poor_connectivity", "Poor connectivity or communication breakdown *"),
         ("poor_evidence", "Poor or incomplete evidence"),
-        ("safety_incident", "Safety incident"),
-        ("non_conformity", "Non-conformity and escalation *"),
+        ("safety_incident", "Safety incidents during remote supervision *"),
+        ("non_conformity", "Non-conformity detection and escalation procedures *"),
     ):
         text_area("process", key, label)
     render_profile_manager(
         "controls",
         "C1 uses the project-wide procedures above. Alternative profiles should "
-        "contain only changed hold points, fallbacks or operating controls.",
+        "contain only changed hold points, contingency procedures or operating controls.",
     )
 
 
@@ -1312,7 +1545,7 @@ def render_review() -> None:
         allocation_rows.append(
             {
                 "Activity": activity_display_name(activity) or f"Activity {index}",
-                "People": profile_label(
+                "Manpower": profile_label(
                     plan, "people", activity.get("people_profile_id", "P1")
                 ),
                 "Technology": profile_label(
@@ -1320,7 +1553,7 @@ def render_review() -> None:
                     "technology",
                     activity.get("technology_profile_id", "T1"),
                 ),
-                "Controls": profile_label(
+                "Process / contingency": profile_label(
                     plan, "controls", activity.get("control_profile_id", "C1")
                 ),
                 "Records": profile_label(
@@ -1338,19 +1571,19 @@ def render_review() -> None:
     st.markdown("#### QP(S) declarations")
     sign = plan["signoff"]
     sign["confirm_professional_judgement"] = st.checkbox(
-        "I applied professional judgement to the suitability of RSS for each activity.",
+        "I applied professional judgement to the suitability of RSS for each activity. *",
         sign["confirm_professional_judgement"],
     )
     sign["confirm_annex_d"] = st.checkbox(
-        "I reviewed the applicable Annex D minimum requirements and documented alternatives.",
+        "I reviewed the applicable Annex D minimum requirements and documented alternatives. *",
         sign["confirm_annex_d"],
     )
     sign["confirm_fallback"] = st.checkbox(
-        "I will require in-person supervision whenever the intended outcome cannot be achieved remotely.",
+        "I will require in-person supervision whenever the intended outcome cannot be achieved remotely. *",
         sign["confirm_fallback"],
     )
     sign["confirm_records"] = st.checkbox(
-        "RSS records will be controlled, protected, retrievable and retained as stated.",
+        "RSS records will be controlled, protected, retrievable and retained as stated. *",
         sign["confirm_records"],
     )
     c1, c2 = st.columns(2)
@@ -1397,13 +1630,13 @@ def render_sidebar() -> str:
     with st.sidebar:
         st.markdown("## RSS Plan Builder")
         st.caption("For Qualified Persons")
-        selected = st.radio(
+        st.radio(
             "PLAN PROGRESS",
             STEPS,
-            index=STEPS.index(st.session_state.current_step),
             label_visibility="visible",
+            key="sidebar_step",
+            on_change=handle_sidebar_navigation,
         )
-        st.session_state.current_step = selected
         issues = validate(st.session_state.plan)
         completion = max(0, round(100 - min(len(issues), 20) / 20 * 100))
         st.progress(completion / 100, text=f"{completion}% builder complete")
@@ -1429,7 +1662,7 @@ def render_sidebar() -> str:
                 st.rerun()
             except Exception:
                 st.error("This is not a valid RSS working file.")
-    return selected
+    return st.session_state.current_step
 
 
 st.markdown(
@@ -1455,7 +1688,7 @@ st.markdown(
   <div class="rss-eyebrow">BCA-aligned guided workflow</div>
   <h1>Build a defensible remote supervision plan.</h1>
   <p>Move from activity assessment to a structured submission report, with
-  professional judgement and fallback controls visible at every step.</p>
+  professional judgement and contingency controls visible at every step.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -1476,18 +1709,20 @@ renderers = {
 }
 renderers[selected_step]()
 
+render_navigation_alert()
+
 st.divider()
 index = STEPS.index(selected_step)
 left, _, right = st.columns([1, 4, 1])
 with left:
     if index > 0 and st.button("← Back", use_container_width=True):
-        st.session_state.current_step = STEPS[index - 1]
+        request_navigation(STEPS[index - 1], check_required=False)
         st.rerun()
 with right:
     if index < len(STEPS) - 1 and st.button(
         "Continue →", type="primary", use_container_width=True
     ):
-        st.session_state.current_step = STEPS[index + 1]
+        request_navigation(STEPS[index + 1])
         st.rerun()
 
 st.caption(
