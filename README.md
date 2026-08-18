@@ -19,8 +19,9 @@ Microsoft Word report.
   profiles; activities refer to a selected profile and record only
   activity-specific requirements or variations
 - Required-field navigation alerts before moving forward with an incomplete step
-- Phase shortcuts to follow the previous activity or use Activity 1 for all
-  activities
+- Linked implementation phasing: use one shared definition for all activities,
+  select the Guidebook default, inherit any preceding activity, or enter a new
+  activity-specific definition
 - Project-wide phasing, people, technology, controls and records remain in the
   BCA plan sections without repeating the same prose in every activity
 - Readiness checks before export

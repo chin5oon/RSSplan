@@ -251,6 +251,9 @@ DEFAULTS = {
             }
         ],
     },
+    "use_shared_activity_phasing": False,
+    "shared_phasing_source": "default",
+    "shared_implementation_phases": [],
     "activities": [],
     "signoff": {
         "confirm_professional_judgement": False,
@@ -333,7 +336,8 @@ def new_activity() -> dict:
         "complexity": "Simple",
         "frequency": "Periodic",
         "approach": "Technology Replacement",
-        "implementation_phases": [new_implementation_phase()],
+        "phasing_source": "default",
+        "implementation_phases": [],
         "people_profile_id": "P1",
         "technology_profile_id": "T1",
         "control_profile_id": "C1",
@@ -360,6 +364,8 @@ def _merge_missing(target: dict, defaults: dict) -> dict:
 def migrate_plan(plan: dict) -> dict:
     """Upgrade older working files without discarding user-entered content."""
     _merge_missing(plan, DEFAULTS)
+    if plan.get("shared_phasing_source") not in ("default", "new"):
+        plan["shared_phasing_source"] = "default"
     profiles = plan.setdefault("profiles", {})
     for kind, default_profiles in DEFAULTS["profiles"].items():
         existing = profiles.setdefault(kind, [])
@@ -371,22 +377,30 @@ def migrate_plan(plan: dict) -> dict:
             profile.setdefault("default", profile.get("id") == default_id)
             _merge_missing(profile, default_profiles[0])
 
+    for position, phase in enumerate(plan.get("shared_implementation_phases", [])):
+        _merge_missing(phase, new_implementation_phase(position))
+
     for activity in plan.setdefault("activities", []):
         legacy_phase = activity.get("phase", "Phase 1")
         legacy_extent = activity.get("extent", "")
         had_implementation_phases = bool(activity.get("implementation_phases"))
+        had_phasing_source = "phasing_source" in activity
         _merge_missing(activity, new_activity())
+        if had_implementation_phases and not had_phasing_source:
+            activity["phasing_source"] = "new"
         if not had_implementation_phases:
-            position = (
-                list(PHASE_PRESETS).index(legacy_phase)
-                if legacy_phase in PHASE_PRESETS
-                else 0
-            )
-            phase = new_implementation_phase(position)
-            phase["name"] = legacy_phase or "Phase 1"
-            if legacy_extent:
-                phase["rss_extent"] = legacy_extent
-            activity["implementation_phases"] = [phase]
+            if (activity.get("phase") or activity.get("extent")) and not had_phasing_source:
+                position = (
+                    list(PHASE_PRESETS).index(legacy_phase)
+                    if legacy_phase in PHASE_PRESETS
+                    else 0
+                )
+                phase = new_implementation_phase(position)
+                phase["name"] = legacy_phase or "Phase 1"
+                if legacy_extent:
+                    phase["rss_extent"] = legacy_extent
+                activity["implementation_phases"] = [phase]
+                activity["phasing_source"] = "new"
         for position, phase in enumerate(activity["implementation_phases"]):
             _merge_missing(phase, new_implementation_phase(position))
         activity["work_type"] = flatten_legacy_activity(activity)
@@ -571,12 +585,172 @@ def phase_label(phase: dict) -> str:
     return phase.get("name", "").strip() or "Unnamed phase"
 
 
-def clone_implementation_phases(phases: list[dict]) -> list[dict]:
-    """Copy phase content while assigning fresh widget-safe identifiers."""
-    copied = json.loads(json.dumps(phases))
-    for phase in copied:
-        phase["uid"] = uuid4().hex[:10]
-    return copied
+def guidebook_default_phases() -> list[dict]:
+    """Return the recommended Phase 1-3 progression from the RSS Guidebook."""
+    return [new_implementation_phase(position) for position in range(3)]
+
+
+def resolve_implementation_phases(
+    plan: dict, activity_index: int, seen: set[str] | None = None
+) -> list[dict]:
+    """Resolve shared, default, new or preceding-activity phasing without copying."""
+    if plan.get("use_shared_activity_phasing", False):
+        if plan.get("shared_phasing_source") == "new":
+            return plan.get("shared_implementation_phases", [])
+        return guidebook_default_phases()
+
+    activities = plan.get("activities", [])
+    if activity_index < 0 or activity_index >= len(activities):
+        return []
+    activity = activities[activity_index]
+    source = activity.get("phasing_source", "default")
+    if source == "default":
+        return guidebook_default_phases()
+    if source == "new":
+        return activity.get("implementation_phases", [])
+    if source.startswith("activity:"):
+        source_uid = source.split(":", 1)[1]
+        seen = set() if seen is None else set(seen)
+        if source_uid in seen:
+            return []
+        seen.add(source_uid)
+        for preceding_index, preceding in enumerate(activities[:activity_index]):
+            if preceding.get("uid") == source_uid:
+                return resolve_implementation_phases(plan, preceding_index, seen)
+    return []
+
+
+def implementation_phasing_source_label(plan: dict, activity_index: int) -> str:
+    if plan.get("use_shared_activity_phasing", False):
+        return (
+            "Shared new implementation phasing"
+            if plan.get("shared_phasing_source") == "new"
+            else "Shared Guidebook default"
+        )
+    activity = plan["activities"][activity_index]
+    source = activity.get("phasing_source", "default")
+    if source == "default":
+        return "Default - Guidebook recommended Phases 1-3"
+    if source == "new":
+        return "New - activity-specific implementation phasing"
+    if source.startswith("activity:"):
+        source_uid = source.split(":", 1)[1]
+        for index, preceding in enumerate(plan["activities"][:activity_index]):
+            if preceding.get("uid") == source_uid:
+                name = activity_display_name(preceding) or "Unnamed activity"
+                return f"Activity {index + 1:02d} - {name}"
+    return "Invalid phasing source"
+
+
+def materialize_activity_phasing(plan: dict) -> dict:
+    """Create a report-ready copy with every activity's effective phases expanded."""
+    materialized = json.loads(json.dumps(plan))
+    for index, activity in enumerate(materialized.get("activities", [])):
+        activity["implementation_phases"] = json.loads(
+            json.dumps(resolve_implementation_phases(plan, index))
+        )
+    return materialized
+
+
+def render_implementation_phase_editor(phases: list[dict], owner_id: str) -> None:
+    """Render one editable implementation-phasing definition."""
+    if not phases:
+        phases.append(new_implementation_phase())
+    for phase_index, phase in enumerate(list(phases)):
+        phase_id = phase["uid"]
+        with st.container(border=True):
+            phase_title, remove_column = st.columns([5, 1])
+            with phase_title:
+                st.markdown(
+                    f"**Phase entry {phase_index + 1}: {phase_label(phase)}**"
+                )
+            with remove_column:
+                if len(phases) > 1 and st.button(
+                    "Remove",
+                    key=f"remove_phase_{owner_id}_{phase_id}",
+                    use_container_width=True,
+                ):
+                    phases.remove(phase)
+                    st.rerun()
+            row1, row2, row3 = st.columns(3)
+            with row1:
+                phase["name"] = st.selectbox(
+                    "Phase",
+                    list(PHASE_PRESETS),
+                    index=(
+                        list(PHASE_PRESETS).index(phase["name"])
+                        if phase["name"] in PHASE_PRESETS
+                        else 0
+                    ),
+                    key=f"phase_name_{owner_id}_{phase_id}",
+                )
+                if phase["name"] == "Custom":
+                    phase["custom_name"] = st.text_input(
+                        "Custom phase name *",
+                        phase.get("custom_name", ""),
+                        key=f"phase_custom_name_{owner_id}_{phase_id}",
+                    )
+                if st.button(
+                    "Apply selected phase guide defaults",
+                    key=f"phase_defaults_{owner_id}_{phase_id}",
+                    help=(
+                        "Replaces the progress range, RSS extent and "
+                        "parallel-supervision entry for this phase."
+                    ),
+                ):
+                    preset = PHASE_PRESETS[phase["name"]]
+                    phase["progress_range"] = preset["progress_range"]
+                    phase["rss_extent"] = preset["rss_extent"]
+                    phase["parallel_supervision"] = preset["parallel_supervision"]
+                    for widget_key in (
+                        f"phase_progress_{owner_id}_{phase_id}",
+                        f"phase_extent_{owner_id}_{phase_id}",
+                        f"phase_parallel_{owner_id}_{phase_id}",
+                    ):
+                        st.session_state.pop(widget_key, None)
+                    st.rerun()
+            with row2:
+                phase["progress_range"] = st.text_input(
+                    "Activity progress range *",
+                    phase.get("progress_range", ""),
+                    key=f"phase_progress_{owner_id}_{phase_id}",
+                )
+            with row3:
+                phase["rss_extent"] = st.text_input(
+                    "Extent of RSS *",
+                    phase.get("rss_extent", ""),
+                    key=f"phase_extent_{owner_id}_{phase_id}",
+                )
+            row4, row5 = st.columns(2)
+            with row4:
+                phase["parallel_supervision"] = st.text_area(
+                    "Parallel / in-person verification",
+                    phase.get("parallel_supervision", ""),
+                    key=f"phase_parallel_{owner_id}_{phase_id}",
+                )
+                phase["acceptance_criteria"] = st.text_area(
+                    "Acceptance / progression criteria *",
+                    phase.get("acceptance_criteria", ""),
+                    key=f"phase_acceptance_{owner_id}_{phase_id}",
+                )
+            with row5:
+                phase["review_point"] = st.text_area(
+                    "QP(S) review point *",
+                    phase.get("review_point", ""),
+                    key=f"phase_review_{owner_id}_{phase_id}",
+                )
+                phase["remarks"] = st.text_area(
+                    "Phase remarks",
+                    phase.get("remarks", ""),
+                    key=f"phase_remarks_{owner_id}_{phase_id}",
+                )
+    if st.button(
+        "+ Add implementation phase",
+        key=f"add_phase_{owner_id}",
+        type="secondary",
+    ):
+        phases.append(new_implementation_phase(len(phases)))
+        st.rerun()
 
 
 def render_profile_manager(kind: str, description: str) -> None:
@@ -737,10 +911,13 @@ def validate(plan: dict) -> list[tuple[int, str]]:
             issues.append(
                 (activity_step, f"Complete evidence requirements for activity {index}.")
             )
-        phases = activity.get("implementation_phases") or []
+        phases = resolve_implementation_phases(plan, index - 1)
         if not phases:
             issues.append(
-                (activity_step, f"Add an implementation phase for activity {index}.")
+                (
+                    activity_step,
+                    f"Select or add valid implementation phasing for activity {index}.",
+                )
             )
         for phase_index, phase in enumerate(phases, start=1):
             if any(
@@ -930,6 +1107,47 @@ def render_project() -> None:
 
 def render_activities() -> None:
     st.subheader("Apply the project arrangements to each activity")
+    plan = st.session_state.plan
+    st.markdown("#### Implementation phasing setup")
+    plan["use_shared_activity_phasing"] = st.checkbox(
+        "Use the same implementation phasing for all activities",
+        value=plan.get("use_shared_activity_phasing", False),
+        key="use_shared_activity_phasing",
+        help=(
+            "When selected, define the implementation phasing once here. Individual "
+            "activities will inherit it and will not show separate phasing fields."
+        ),
+    )
+    if plan["use_shared_activity_phasing"]:
+        shared_options = ["default", "new"]
+        current_shared_source = plan.get("shared_phasing_source", "default")
+        if current_shared_source not in shared_options:
+            current_shared_source = "default"
+        plan["shared_phasing_source"] = st.selectbox(
+            "Implementation phasing for all activities",
+            shared_options,
+            index=shared_options.index(current_shared_source),
+            format_func=lambda value: (
+                "Default - Guidebook recommended Phases 1-3"
+                if value == "default"
+                else "New - enter one shared implementation phasing"
+            ),
+            key="shared_phasing_source_selector",
+        )
+        if plan["shared_phasing_source"] == "new":
+            st.caption(
+                "Enter the shared implementation phasing once. It will apply to every "
+                "activity in this plan."
+            )
+            render_implementation_phase_editor(
+                plan["shared_implementation_phases"], "shared"
+            )
+        else:
+            st.info(
+                "All activities use the Guidebook default: Phase 1 (first 30%, maximum "
+                "15% RSS), Phase 2 (30-75%, maximum 30% RSS), and Phase 3 (75-100%, "
+                "maximum 50% RSS). No additional phasing fields are required."
+            )
     st.warning(
         "The matrix is a starting point. Upgrade to in-person attendance whenever "
         "workmanship, site conditions, visibility or intervention capability is inadequate."
@@ -939,24 +1157,6 @@ def render_activities() -> None:
         "reusable project arrangements, and record only activity-specific variations. "
         "Each activity can have several implementation phases."
     )
-    plan = st.session_state.plan
-    if len(plan["activities"]) > 1:
-        st.markdown("#### Phase implementation shortcuts")
-        st.caption(
-            "Copying replaces the destination phase entries. You can edit any copied "
-            "entry afterwards."
-        )
-        if st.button(
-            "Make implementation phases the same for all activities (use Activity 1)",
-            type="secondary",
-        ):
-            source_phases = plan["activities"][0]["implementation_phases"]
-            for other_activity in plan["activities"][1:]:
-                other_activity["implementation_phases"] = clone_implementation_phases(
-                    source_phases
-                )
-            st.success("Activity 1 implementation phases were copied to all activities.")
-            st.rerun()
     for index, activity in enumerate(plan["activities"]):
         activity_id = activity["uid"]
         selected_name = activity_display_name(activity) or "Select an activity"
@@ -1097,119 +1297,67 @@ def render_activities() -> None:
             )
 
             st.markdown("##### Implementation phases")
-            st.caption(
-                "Add every phase that applies to this activity. Progression is "
-                "activity-specific and remains subject to the project-wide gates."
-            )
-            if index > 0 and st.button(
-                "Follow previous activity's implementation phases",
-                key=f"copy_previous_phases_{activity_id}",
-                help=(
-                    "Replaces this activity's phase entries with a copy of the "
-                    "immediately preceding activity's entries."
-                ),
-            ):
-                activity["implementation_phases"] = clone_implementation_phases(
-                    plan["activities"][index - 1]["implementation_phases"]
+            if plan["use_shared_activity_phasing"]:
+                effective_phases = resolve_implementation_phases(plan, index)
+                st.info(
+                    f"Uses **{implementation_phasing_source_label(plan, index)}**. "
+                    "The implementation phasing is defined once at the top of this page; "
+                    "no activity-specific phasing fields are required."
                 )
-                st.rerun()
-            phases = activity["implementation_phases"]
-            for phase_index, phase in enumerate(list(phases)):
-                phase_id = phase["uid"]
-                with st.container(border=True):
-                    phase_title, remove_column = st.columns([5, 1])
-                    with phase_title:
-                        st.markdown(
-                            f"**Phase entry {phase_index + 1}: "
-                            f"{phase_label(phase)}**"
-                        )
-                    with remove_column:
-                        if len(phases) > 1 and st.button(
-                            "Remove",
-                            key=f"remove_phase_{activity_id}_{phase_id}",
-                            use_container_width=True,
-                        ):
-                            phases.remove(phase)
-                            st.rerun()
-                    row1, row2, row3 = st.columns(3)
-                    with row1:
-                        phase["name"] = st.selectbox(
-                            "Phase",
-                            list(PHASE_PRESETS),
-                            index=list(PHASE_PRESETS).index(phase["name"])
-                            if phase["name"] in PHASE_PRESETS
-                            else 0,
-                            key=f"phase_name_{activity_id}_{phase_id}",
-                        )
-                        if phase["name"] == "Custom":
-                            phase["custom_name"] = st.text_input(
-                                "Custom phase name *",
-                                phase.get("custom_name", ""),
-                                key=f"phase_custom_name_{activity_id}_{phase_id}",
-                            )
-                        if st.button(
-                            "Apply selected phase guide defaults",
-                            key=f"phase_defaults_{activity_id}_{phase_id}",
-                            help=(
-                                "Replaces the progress range, RSS extent and "
-                                "parallel-supervision entry for this phase."
-                            ),
-                        ):
-                            preset = PHASE_PRESETS[phase["name"]]
-                            phase["progress_range"] = preset["progress_range"]
-                            phase["rss_extent"] = preset["rss_extent"]
-                            phase["parallel_supervision"] = preset[
-                                "parallel_supervision"
-                            ]
-                            for widget_key in (
-                                f"phase_progress_{activity_id}_{phase_id}",
-                                f"phase_extent_{activity_id}_{phase_id}",
-                                f"phase_parallel_{activity_id}_{phase_id}",
-                            ):
-                                st.session_state.pop(widget_key, None)
-                            st.rerun()
-                    with row2:
-                        phase["progress_range"] = st.text_input(
-                            "Activity progress range *",
-                            phase.get("progress_range", ""),
-                            key=f"phase_progress_{activity_id}_{phase_id}",
-                        )
-                    with row3:
-                        phase["rss_extent"] = st.text_input(
-                            "Extent of RSS *",
-                            phase.get("rss_extent", ""),
-                            key=f"phase_extent_{activity_id}_{phase_id}",
-                        )
-                    row4, row5 = st.columns(2)
-                    with row4:
-                        phase["parallel_supervision"] = st.text_area(
-                            "Parallel / in-person verification",
-                            phase.get("parallel_supervision", ""),
-                            key=f"phase_parallel_{activity_id}_{phase_id}",
-                        )
-                        phase["acceptance_criteria"] = st.text_area(
-                            "Acceptance / progression criteria *",
-                            phase.get("acceptance_criteria", ""),
-                            key=f"phase_acceptance_{activity_id}_{phase_id}",
-                        )
-                    with row5:
-                        phase["review_point"] = st.text_area(
-                            "QP(S) review point *",
-                            phase.get("review_point", ""),
-                            key=f"phase_review_{activity_id}_{phase_id}",
-                        )
-                        phase["remarks"] = st.text_area(
-                            "Phase remarks",
-                            phase.get("remarks", ""),
-                            key=f"phase_remarks_{activity_id}_{phase_id}",
-                        )
-            if st.button(
-                "+ Add implementation phase",
-                key=f"add_phase_{activity_id}",
-                type="secondary",
-            ):
-                phases.append(new_implementation_phase(len(phases)))
-                st.rerun()
+            else:
+                preceding_sources = [
+                    f"activity:{preceding.get('uid')}"
+                    for preceding in plan["activities"][:index]
+                ]
+                source_options = ["default", *preceding_sources, "new"]
+                current_source = activity.get("phasing_source", "default")
+                if current_source not in source_options:
+                    current_source = "default"
+
+                def format_phasing_source(value: str) -> str:
+                    if value == "default":
+                        return "Default - Guidebook recommended Phases 1-3"
+                    if value == "new":
+                        return "New - enter a different implementation phasing"
+                    source_uid = value.split(":", 1)[1]
+                    for preceding_index, preceding in enumerate(
+                        plan["activities"][:index]
+                    ):
+                        if preceding.get("uid") == source_uid:
+                            name = activity_display_name(preceding) or "Unnamed activity"
+                            return f"Activity {preceding_index + 1:02d} - {name}"
+                    return "Unavailable preceding activity"
+
+                activity["phasing_source"] = st.selectbox(
+                    "Implementation phasing source",
+                    source_options,
+                    index=source_options.index(current_source),
+                    format_func=format_phasing_source,
+                    key=f"phasing_source_{activity_id}",
+                    help=(
+                        "Use the Guidebook default, link to any preceding activity's "
+                        "implementation phasing, or choose New to enter different details."
+                    ),
+                )
+                if activity["phasing_source"] == "new":
+                    st.caption(
+                        "Only this activity uses the implementation phasing entered below."
+                    )
+                    render_implementation_phase_editor(
+                        activity["implementation_phases"], activity_id
+                    )
+                    effective_phases = activity["implementation_phases"]
+                else:
+                    effective_phases = resolve_implementation_phases(plan, index)
+                    st.info(
+                        f"Uses **{implementation_phasing_source_label(plan, index)}**. "
+                        "No additional phasing fields are required for this activity."
+                    )
+            if effective_phases:
+                st.caption(
+                    "Effective phases: "
+                    + ", ".join(phase_label(phase) for phase in effective_phases)
+                )
 
             activity["annex_d_reviewed"] = st.checkbox(
                 "Applicable Annex D baseline and limitations reviewed *",
@@ -1219,7 +1367,11 @@ def render_activities() -> None:
             if len(plan["activities"]) > 1 and st.button(
                 "Remove activity", key=f"remove_{activity_id}"
             ):
+                removed_source = f"activity:{activity_id}"
                 plan["activities"].remove(activity)
+                for remaining_activity in plan["activities"]:
+                    if remaining_activity.get("phasing_source") == removed_source:
+                        remaining_activity["phasing_source"] = "default"
                 st.rerun()
     if st.button("+ Add another activity", type="secondary"):
         plan["activities"].append(new_activity())
@@ -1410,20 +1562,25 @@ def render_phasing() -> None:
     st.markdown("#### Activity phase coverage - automatic summary")
     st.info(
         "**This table is not filled in here.** It is populated automatically from "
-        "the **Implementation phases** fields inside each activity in Step 7. Use it "
-        "to check which activities have phase entries after those details are completed."
+        "the implementation phasing selections in Step 7, whether they use the shared "
+        "setup, the Guidebook default, a preceding activity, or a new definition."
     )
     rows = []
     for index, activity in enumerate(st.session_state.plan["activities"], start=1):
+        effective_phases = resolve_implementation_phases(
+            st.session_state.plan, index - 1
+        )
         rows.append(
             {
                 "Activity": activity_display_name(activity) or f"Activity {index}",
                 "Phases": ", ".join(
                     phase_label(phase)
-                    for phase in activity.get("implementation_phases", [])
+                    for phase in effective_phases
                 )
                 or "Not yet configured in Step 7",
-                "Source": "Step 7 - Activities",
+                "Source": implementation_phasing_source_label(
+                    st.session_state.plan, index - 1
+                ),
             }
         )
     if rows:
@@ -1542,6 +1699,7 @@ def render_review() -> None:
     st.markdown("#### Activity allocation summary")
     allocation_rows = []
     for index, activity in enumerate(plan["activities"], start=1):
+        effective_phases = resolve_implementation_phases(plan, index - 1)
         allocation_rows.append(
             {
                 "Activity": activity_display_name(activity) or f"Activity {index}",
@@ -1561,7 +1719,10 @@ def render_review() -> None:
                 ),
                 "Phases": ", ".join(
                     phase_label(phase)
-                    for phase in activity.get("implementation_phases", [])
+                    for phase in effective_phases
+                ),
+                "Phasing source": implementation_phasing_source_label(
+                    plan, index - 1
                 ),
             }
         )
@@ -1598,7 +1759,7 @@ def render_review() -> None:
 
     st.markdown("#### Submission package")
     docx_bytes = build_docx(
-        plan,
+        materialize_activity_phasing(plan),
         site_plan_bytes=st.session_state.site_plan_bytes,
         org_chart_bytes=st.session_state.org_chart_bytes,
     )
