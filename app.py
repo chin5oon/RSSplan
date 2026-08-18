@@ -680,6 +680,28 @@ def materialize_activity_phasing(plan: dict) -> dict:
     return materialized
 
 
+def apply_phase_guide_defaults(
+    phase: dict, owner_id: str, phase_id: str
+) -> None:
+    """Apply the selected Guidebook phase values to the phase editor."""
+    phase_name_key = f"phase_name_{owner_id}_{phase_id}"
+    selected_phase = st.session_state[phase_name_key]
+    preset = PHASE_PRESETS[selected_phase]
+    phase["name"] = selected_phase
+    phase["progress_range"] = preset["progress_range"]
+    phase["rss_extent"] = preset["rss_extent"]
+    phase["parallel_supervision"] = preset["parallel_supervision"]
+    st.session_state[f"phase_progress_{owner_id}_{phase_id}"] = preset[
+        "progress_range"
+    ]
+    st.session_state[f"phase_extent_{owner_id}_{phase_id}"] = preset[
+        "rss_extent"
+    ]
+    st.session_state[f"phase_parallel_{owner_id}_{phase_id}"] = preset[
+        "parallel_supervision"
+    ]
+
+
 def render_implementation_phase_editor(phases: list[dict], owner_id: str) -> None:
     """Render one editable implementation-phasing definition."""
     if not phases:
@@ -711,6 +733,14 @@ def render_implementation_phase_editor(phases: list[dict], owner_id: str) -> Non
                         else 0
                     ),
                     key=f"phase_name_{owner_id}_{phase_id}",
+                    on_change=apply_phase_guide_defaults,
+                    args=(phase, owner_id, phase_id),
+                )
+                st.caption(
+                    "Selecting a phase automatically fills its Guidebook "
+                    "progress range, RSS extent and parallel / in-person "
+                    "verification. You can edit these values afterwards; "
+                    "choose Custom to enter your own."
                 )
                 if phase["name"] == "Custom":
                     phase["custom_name"] = st.text_input(
@@ -718,43 +748,32 @@ def render_implementation_phase_editor(phases: list[dict], owner_id: str) -> Non
                         phase.get("custom_name", ""),
                         key=f"phase_custom_name_{owner_id}_{phase_id}",
                     )
-                if st.button(
-                    "Apply selected phase guide defaults",
-                    key=f"phase_defaults_{owner_id}_{phase_id}",
-                    help=(
-                        "Replaces the progress range, RSS extent and "
-                        "parallel-supervision entry for this phase."
-                    ),
-                ):
-                    preset = PHASE_PRESETS[phase["name"]]
-                    phase["progress_range"] = preset["progress_range"]
-                    phase["rss_extent"] = preset["rss_extent"]
-                    phase["parallel_supervision"] = preset["parallel_supervision"]
-                    for widget_key in (
-                        f"phase_progress_{owner_id}_{phase_id}",
-                        f"phase_extent_{owner_id}_{phase_id}",
-                        f"phase_parallel_{owner_id}_{phase_id}",
-                    ):
-                        st.session_state.pop(widget_key, None)
-                    st.rerun()
             with row2:
+                progress_key = f"phase_progress_{owner_id}_{phase_id}"
+                if progress_key not in st.session_state:
+                    st.session_state[progress_key] = phase.get("progress_range", "")
                 phase["progress_range"] = st.text_input(
                     "Activity progress range *",
-                    phase.get("progress_range", ""),
-                    key=f"phase_progress_{owner_id}_{phase_id}",
+                    key=progress_key,
                 )
             with row3:
+                extent_key = f"phase_extent_{owner_id}_{phase_id}"
+                if extent_key not in st.session_state:
+                    st.session_state[extent_key] = phase.get("rss_extent", "")
                 phase["rss_extent"] = st.text_input(
                     "Extent of RSS *",
-                    phase.get("rss_extent", ""),
-                    key=f"phase_extent_{owner_id}_{phase_id}",
+                    key=extent_key,
                 )
             row4, row5 = st.columns(2)
             with row4:
+                parallel_key = f"phase_parallel_{owner_id}_{phase_id}"
+                if parallel_key not in st.session_state:
+                    st.session_state[parallel_key] = phase.get(
+                        "parallel_supervision", ""
+                    )
                 phase["parallel_supervision"] = st.text_area(
                     "Parallel / in-person verification",
-                    phase.get("parallel_supervision", ""),
-                    key=f"phase_parallel_{owner_id}_{phase_id}",
+                    key=parallel_key,
                 )
                 phase["acceptance_criteria"] = st.text_area(
                     "Acceptance / progression criteria *",
