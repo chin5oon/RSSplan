@@ -642,6 +642,34 @@ def implementation_phasing_source_label(plan: dict, activity_index: int) -> str:
     return "Invalid phasing source"
 
 
+def render_implementation_phase_summary(phases: list[dict]) -> None:
+    """Show the full effective phasing when no editable fields are displayed."""
+    if not phases:
+        st.warning("No implementation phases are currently defined.")
+        return
+    st.markdown("###### What this implementation phasing contains")
+    rows = [
+        {
+            "Phase": phase_label(phase),
+            "Activity progress range": phase.get("progress_range", "")
+            or "Not specified",
+            "Extent of RSS": phase.get("rss_extent", "") or "Not specified",
+            "Parallel / in-person verification": phase.get(
+                "parallel_supervision", ""
+            )
+            or "Not specified",
+            "Acceptance / progression criteria": phase.get(
+                "acceptance_criteria", ""
+            )
+            or "Not specified",
+            "QP(S) review point": phase.get("review_point", "")
+            or "Not specified",
+        }
+        for phase in phases
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
 def materialize_activity_phasing(plan: dict) -> dict:
     """Create a report-ready copy with every activity's effective phases expanded."""
     materialized = json.loads(json.dumps(plan))
@@ -1148,6 +1176,7 @@ def render_activities() -> None:
                 "15% RSS), Phase 2 (30-75%, maximum 30% RSS), and Phase 3 (75-100%, "
                 "maximum 50% RSS). No additional phasing fields are required."
             )
+            render_implementation_phase_summary(guidebook_default_phases())
     st.warning(
         "The matrix is a starting point. Upgrade to in-person attendance whenever "
         "workmanship, site conditions, visibility or intervention capability is inadequate."
@@ -1353,11 +1382,7 @@ def render_activities() -> None:
                         f"Uses **{implementation_phasing_source_label(plan, index)}**. "
                         "No additional phasing fields are required for this activity."
                     )
-            if effective_phases:
-                st.caption(
-                    "Effective phases: "
-                    + ", ".join(phase_label(phase) for phase in effective_phases)
-                )
+                    render_implementation_phase_summary(effective_phases)
 
             activity["annex_d_reviewed"] = st.checkbox(
                 "Applicable Annex D baseline and limitations reviewed *",
